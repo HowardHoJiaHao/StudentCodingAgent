@@ -1,0 +1,14 @@
+# Secrets — never commit these
+.env
+.env.*
+!.env.example
+admin.env
+*.key
+*.pem
+
+# Not yours to redistribute
+howardcodingAgent/
+
+# Build / deps
+node_modules/
+*.vsix

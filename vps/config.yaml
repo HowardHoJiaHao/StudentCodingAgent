@@ -1,0 +1,43 @@
+# LiteLLM proxy config.
+#
+# NOTE: LiteLLM iterates quickly. If a key here is rejected on startup, check it
+# against the current docs at https://docs.litellm.ai/docs/proxy/configs — the
+# shape below reflects the stable release at time of writing.
+
+model_list:
+  - model_name: deepseek-chat
+    litellm_params:
+      model: deepseek/deepseek-chat
+      api_key: os.environ/DEEPSEEK_API_KEY
+      # Half of your overshoot ceiling: worst-case cost of one runaway request.
+      # Raise it if students complain about truncated answers.
+      max_tokens: 8000
+
+  # R1. Tool calling is weaker; offered but not the default.
+  - model_name: deepseek-reasoner
+    litellm_params:
+      model: deepseek/deepseek-reasoner
+      api_key: os.environ/DEEPSEEK_API_KEY
+      max_tokens: 8000
+
+general_settings:
+  master_key: os.environ/LITELLM_MASTER_KEY
+  database_url: os.environ/DATABASE_URL
+
+litellm_settings:
+  # Silently drop params a model doesn't support instead of erroring — editors
+  # and SDKs send a lot of OpenAI-only fields.
+  drop_params: true
+
+  # Belt and braces: even a key with a broken budget can't run forever.
+  max_budget: 500        # total spend ceiling across the whole proxy, USD
+  budget_duration: 30d
+
+  # Response caching is deliberately OFF. Coding prompts are rarely identical,
+  # so the hit rate would be near zero, and a stale hit across two students
+  # would be confusing to debug.
+
+router_settings:
+  routing_strategy: simple-shuffle
+  redis_host: os.environ/REDIS_HOST
+  redis_port: os.environ/REDIS_PORT

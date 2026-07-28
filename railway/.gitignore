@@ -1,0 +1,7 @@
+# This directory gets pushed to GitHub for Railway to build from.
+# Nothing secret may ever live here — all secrets go in Railway's Variables tab.
+.env
+.env.*
+!.env.example
+*.key
+*.pem

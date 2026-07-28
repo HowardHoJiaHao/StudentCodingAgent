@@ -1,0 +1,13 @@
+{
+  "name": "howard-agent",
+  "version": "0.1.0",
+  "description": "A small coding agent that runs on DeepSeek or any OpenAI-compatible API",
+  "type": "module",
+  "bin": { "howard-agent": "./agent.mjs" },
+  "scripts": {
+    "start": "node agent.mjs",
+    "test": "node selftest.mjs"
+  },
+  "engines": { "node": ">=18" },
+  "license": "MIT"
+}

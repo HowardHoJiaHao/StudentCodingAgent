@@ -1,0 +1,178 @@
+// Webview UI. Everything is built with textContent / createElement — model
+// output is never assigned to innerHTML, so a code block containing markup
+// can't execute in the panel.
+
+const vscode = acquireVsCodeApi()
+
+const log = document.getElementById('log')
+const input = document.getElementById('input')
+const sendBtn = document.getElementById('send')
+const stopBtn = document.getElementById('stop')
+const usageEl = document.getElementById('usage')
+
+let current = null // the assistant bubble currently streaming into
+let buffer = ''
+const toolRows = new Map()
+
+function atBottom() {
+  return log.scrollHeight - log.scrollTop - log.clientHeight < 60
+}
+
+function scroll(force) {
+  if (force || atBottom()) log.scrollTop = log.scrollHeight
+}
+
+function bubble(kind) {
+  const el = document.createElement('div')
+  el.className = `msg ${kind}`
+  log.appendChild(el)
+  scroll(true)
+  return el
+}
+
+/** Minimal markdown: fenced code blocks, everything else plain text. */
+function render(el, text) {
+  el.textContent = ''
+  const parts = text.split(/```/)
+
+  parts.forEach((part, i) => {
+    if (i % 2 === 1) {
+      const pre = document.createElement('pre')
+      const code = document.createElement('code')
+      // Drop a leading language tag on the fence line.
+      code.textContent = part.replace(/^[a-zA-Z0-9_+-]*\n/, '')
+      pre.appendChild(code)
+      el.appendChild(pre)
+    } else if (part) {
+      const span = document.createElement('span')
+      span.textContent = part
+      el.appendChild(span)
+    }
+  })
+}
+
+function send() {
+  const text = input.value.trim()
+  if (!text) return
+  input.value = ''
+  vscode.postMessage({ type: 'send', text })
+}
+
+sendBtn.addEventListener('click', send)
+stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'stop' }))
+
+input.addEventListener('keydown', (event) => {
+  // Enter sends, Shift+Enter makes a newline.
+  if (event.key === 'Enter' && !event.shiftKey) {
+    event.preventDefault()
+    send()
+  }
+})
+
+window.addEventListener('message', (event) => {
+  const msg = event.data
+
+  switch (msg.type) {
+    case 'user': {
+      const el = bubble('user')
+      el.textContent = msg.text
+      current = null
+      break
+    }
+
+    case 'assistantStart':
+      current = bubble('assistant')
+      buffer = ''
+      break
+
+    case 'delta':
+      if (!current) {
+        current = bubble('assistant')
+        buffer = ''
+      }
+      buffer += msg.text
+      render(current, buffer)
+      scroll(false)
+      break
+
+    case 'assistantEnd':
+      current = null
+      break
+
+    case 'tool': {
+      const row = document.createElement('div')
+      row.className = 'tool running'
+
+      const name = document.createElement('span')
+      name.className = 'tool-name'
+      name.textContent = msg.name
+
+      const detail = document.createElement('span')
+      detail.className = 'tool-detail'
+      detail.textContent = msg.detail || ''
+
+      const status = document.createElement('span')
+      status.className = 'tool-status'
+      status.textContent = '…'
+
+      row.append(name, detail, status)
+      log.appendChild(row)
+      toolRows.set(msg.id, { row, status })
+      current = null
+      scroll(true)
+      break
+    }
+
+    case 'toolEnd': {
+      const entry = toolRows.get(msg.id)
+      if (!entry) break
+      entry.row.className = `tool ${msg.status}`
+      entry.status.textContent =
+        msg.status === 'ok' ? '✓' : msg.status === 'denied' ? 'denied' : '✕'
+      toolRows.delete(msg.id)
+      break
+    }
+
+    case 'error': {
+      const el = bubble('error')
+      el.textContent = msg.text
+      current = null
+      break
+    }
+
+    case 'status': {
+      const el = bubble('status')
+      el.textContent = msg.text
+      current = null
+      break
+    }
+
+    case 'needkey': {
+      const el = bubble('status')
+      el.textContent = 'You need to sign in first. '
+      const button = document.createElement('button')
+      button.textContent = 'Sign in'
+      button.className = 'inline'
+      button.addEventListener('click', () => vscode.postMessage({ type: 'signin' }))
+      el.appendChild(button)
+      current = null
+      break
+    }
+
+    case 'usage':
+      usageEl.textContent = `${msg.in.toLocaleString()} in · ${msg.out.toLocaleString()} out`
+      break
+
+    case 'busy':
+      sendBtn.disabled = msg.value
+      stopBtn.hidden = !msg.value
+      break
+
+    case 'clear':
+      log.textContent = ''
+      usageEl.textContent = ''
+      current = null
+      toolRows.clear()
+      break
+  }
+})

@@ -1,0 +1,36 @@
+# Caddy fetches and renews a Let's Encrypt certificate automatically, as long
+# as DOMAIN's DNS A record points at this VPS and ports 80/443 are open.
+
+{
+	email {$ACME_EMAIL}
+}
+
+{$DOMAIN} {
+	encode gzip
+
+	# Streaming: never buffer, or students see the whole answer appear at once
+	# instead of token by token.
+	reverse_proxy litellm:4000 {
+		flush_interval -1
+		header_up X-Real-IP {remote_host}
+	}
+
+	# The admin UI and admin API. Lock these to your own IP — anyone reaching
+	# /key/generate with the master key can mint themselves unlimited credit.
+	@admin path /ui* /key/* /user/* /team/* /spend/* /model/*
+	handle @admin {
+		# TODO: replace with your home/office IP, then `docker compose restart caddy`
+		@blocked not remote_ip 1.2.3.4
+		respond @blocked 404
+		reverse_proxy litellm:4000 {
+			flush_interval -1
+		}
+	}
+
+	log {
+		output file /data/access.log {
+			roll_size 10mb
+			roll_keep 5
+		}
+	}
+}

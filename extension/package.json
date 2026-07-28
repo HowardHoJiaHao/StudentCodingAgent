@@ -1,0 +1,83 @@
+{
+  "name": "howard-agent",
+  "displayName": "Howard Agent",
+  "description": "AI coding assistant for students",
+  "version": "0.1.0",
+  "publisher": "howard",
+  "license": "MIT",
+  "engines": { "vscode": "^1.85.0" },
+  "categories": ["Programming Languages", "Machine Learning"],
+  "main": "./src/extension.js",
+  "activationEvents": [],
+  "contributes": {
+    "viewsContainers": {
+      "activitybar": [
+        {
+          "id": "howardAgent",
+          "title": "Howard Agent",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "howardAgent": [
+        {
+          "type": "webview",
+          "id": "howardAgent.chat",
+          "name": "Chat"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "howardAgent.setKey",
+        "title": "Sign In (Set Key)",
+        "category": "Howard Agent"
+      },
+      {
+        "command": "howardAgent.signOut",
+        "title": "Sign Out",
+        "category": "Howard Agent"
+      },
+      {
+        "command": "howardAgent.newChat",
+        "title": "New Chat",
+        "category": "Howard Agent",
+        "icon": "$(add)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "howardAgent.newChat",
+          "when": "view == howardAgent.chat",
+          "group": "navigation"
+        }
+      ]
+    },
+    "configuration": {
+      "title": "Howard Agent",
+      "properties": {
+        "howardAgent.endpoint": {
+          "type": "string",
+          "default": "https://api.yourdomain.com/v1",
+          "markdownDescription": "Your proxy endpoint. Must end in `/v1`."
+        },
+        "howardAgent.model": {
+          "type": "string",
+          "default": "deepseek-chat",
+          "enum": ["deepseek-chat", "deepseek-reasoner"],
+          "markdownEnumDescriptions": [
+            "DeepSeek V3 — the one to use for agent work.",
+            "DeepSeek R1 — reasons more, but tool calling is less reliable."
+          ]
+        },
+        "howardAgent.autoApprove": {
+          "type": "boolean",
+          "default": false,
+          "markdownDescription": "Run file edits and shell commands **without asking**. Only enable in a repo you can `git checkout`."
+        }
+      }
+    }
+  }
+}
