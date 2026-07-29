@@ -1,0 +1,14 @@
+{
+  // Press F5 with this folder open as the workspace root. VS Code launches a
+  // second window ("Extension Development Host") with the extension loaded
+  // from source — no packaging or install needed.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}"]
+    }
+  ]
+}
