@@ -6,6 +6,12 @@
 
 FROM ghcr.io/berriai/litellm:main-stable
 
+# Python buffers stdout when it isn't a TTY, so a container that dies during
+# startup takes its logs with it — Railway shows "Starting Container" and
+# nothing else. Unbuffered output means the crash reason actually reaches the
+# log before the process goes away.
+ENV PYTHONUNBUFFERED=1
+
 COPY config.yaml /app/config.yaml
 
 # The base image sets ENTRYPOINT ["docker/prod_entrypoint.sh"], and that script
