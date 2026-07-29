@@ -88,6 +88,47 @@ class ChatViewProvider {
     this.controller = null
     this.pending = '' // assistant text streaming into the current bubble
     this.asks = new Map() // question id -> { resolve, reject }
+    // Snapshots for Undo, in memory only: they can be large, and offering to
+    // revert a file from a previous session would be a lie once it has been
+    // edited by hand since.
+    this.undoable = new Map() // batch id -> [{ path, before }]
+  }
+
+  /**
+   * Put every file back as it was before this turn. Later edits to the same
+   * file overwrite earlier snapshots in the map, so the value held is always
+   * the state from before the turn began.
+   */
+  async undo(batchId) {
+    const entries = this.undoable.get(batchId)
+    if (!entries || !entries.length) return
+
+    const root = this.root
+    if (!root) return
+
+    let restored = 0
+    let failed = 0
+
+    for (const { path: relative, before } of entries) {
+      const target = vscode.Uri.joinPath(vscode.Uri.file(root), relative)
+      try {
+        if (before === null) await vscode.workspace.fs.delete(target, { useTrash: true })
+        else await vscode.workspace.fs.writeFile(target, Buffer.from(before, 'utf8'))
+        restored++
+      } catch {
+        failed++
+      }
+    }
+
+    this.undoable.delete(batchId)
+    this.post({ type: 'undone', id: batchId })
+
+    const summary =
+      `Reverted ${restored} file${restored === 1 ? '' : 's'}` +
+      (failed ? `, ${failed} could not be restored` : '')
+    this.transcript.push({ type: 'notice', text: summary })
+    this.post({ type: 'notice', text: summary })
+    this.save()
   }
 
   /**
@@ -181,7 +222,8 @@ class ChatViewProvider {
         await vscode.workspace
           .getConfiguration('howardAgent')
           .update('autoApprove', msg.value, vscode.ConfigurationTarget.Global)
-      } else if (msg.type === 'answer') this.answer(msg.id, msg.value)
+      } else if (msg.type === 'undo') await this.undo(msg.id)
+      else if (msg.type === 'answer') this.answer(msg.id, msg.value)
       else if (msg.type === 'send') await this.send(msg.text)
       else if (msg.type === 'stop') {
         this.failAsks('Stopped.')
@@ -317,6 +359,12 @@ class ChatViewProvider {
     this.controller = new AbortController()
     let started = false
 
+    // One undo batch per user turn, matching how people think about it: "put
+    // back what it just did".
+    const batchId = `batch-${Date.now()}`
+    const snapshots = new Map() // path -> before, first write wins
+    const touched = new Map() // path -> { added, removed, created }
+
     const ui = {
       onText: (chunk) => {
         if (!started) {
@@ -342,6 +390,17 @@ class ChatViewProvider {
           if (stats) entry.stats = stats
         }
         this.post({ type: 'toolEnd', id, status, stats })
+      },
+      onFileChange: (entry, stats) => {
+        // Keep the earliest snapshot: undo means "before this turn", not
+        // "before the last of several edits to the same file".
+        if (!snapshots.has(entry.path)) snapshots.set(entry.path, entry.before)
+
+        const running = touched.get(entry.path) || { added: 0, removed: 0, created: false }
+        running.added += (stats && stats.added) || 0
+        running.removed += (stats && stats.removed) || 0
+        running.created = running.created || !!(stats && stats.created)
+        touched.set(entry.path, running)
       },
       onRetry: (attempt, max) =>
         this.post({ type: 'notice', text: `Upstream busy — retrying (${attempt}/${max})…` }),
@@ -377,6 +436,29 @@ class ChatViewProvider {
     } finally {
       this.controller = null
       this.flush()
+
+      if (touched.size) {
+        const files = [...touched].map(([path, s]) => ({ path, ...s }))
+        const totals = files.reduce(
+          (acc, f) => ({ added: acc.added + f.added, removed: acc.removed + f.removed }),
+          { added: 0, removed: 0 },
+        )
+        // Only offer Undo if we actually captured snapshots — a file too large
+        // to snapshot must not get a button that would silently do nothing.
+        const undoable = [...snapshots].map(([path, before]) => ({ path, before }))
+        if (undoable.length) this.undoable.set(batchId, undoable)
+
+        const change = {
+          type: 'changes',
+          id: batchId,
+          files,
+          ...totals,
+          canUndo: undoable.length === files.length,
+        }
+        this.transcript.push(change)
+        this.post(change)
+      }
+
       this.save()
       this.post({ type: 'busy', value: false })
       this.post({ type: 'assistantEnd' })

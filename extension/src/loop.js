@@ -136,6 +136,9 @@ async function runTurn({ endpoint, apiKey, model, messages, root, signal, ui, ap
               const isDetailed = raw && typeof raw === 'object'
               result = isDetailed ? raw.text : raw
               ui.onToolEnd(id, 'ok', result, isDetailed ? raw.stats : null)
+              if (isDetailed && raw.undo && ui.onFileChange) {
+                ui.onFileChange(raw.undo, raw.stats)
+              }
             } catch (err) {
               result = `Error: ${err.message}`
               ui.onToolEnd(id, 'error', result)

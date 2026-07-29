@@ -210,8 +210,84 @@ textarea:focus {
 #budget.low { color: var(--vscode-editorWarning-foreground, #cca700); opacity: 1; }
 #budget.spent { color: var(--vscode-editorError-foreground, #f14c4c); opacity: 1; }
 
-/* Per-edit change summary: +12 −3 */
-.tool-diff { font-size: 0.85em; opacity: 0.8; margin-left: 6px; white-space: nowrap; }
+/* Diff counts, coloured as in git. Uses the theme's own chart colours so it
+   stays legible in light themes too. */
+.diff {
+  display: inline-flex;
+  gap: 6px;
+  margin-left: 6px;
+  font-family: var(--vscode-editor-font-family);
+  font-size: 0.85em;
+  white-space: nowrap;
+}
+.diff-add { color: var(--vscode-charts-green, #2ea043); font-weight: 600; }
+.diff-del { color: var(--vscode-charts-red, #f14c4c); font-weight: 600; }
+.diff.none { opacity: 0.55; }
+
+/* End-of-turn summary of everything written. */
+.msg.changes {
+  padding: 8px 10px;
+  border-radius: 6px;
+  background: var(--vscode-editorWidget-background);
+  border: 1px solid var(--vscode-widget-border, var(--vscode-panel-border));
+}
+
+.changes-head { display: flex; align-items: center; gap: 4px; margin-bottom: 6px; }
+.changes-label { font-weight: 600; font-size: 0.92em; }
+.changes-spacer { flex: 1; }
+.changes-done { font-size: 0.85em; opacity: 0.7; font-style: italic; }
+
+.changes-file {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  padding: 2px 0;
+  font-size: 0.9em;
+}
+
+.changes-verb {
+  min-width: 44px;
+  font-size: 0.85em;
+  opacity: 0.6;
+}
+
+.changes-name {
+  font-family: var(--vscode-editor-font-family);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Working indicator: shown only in the gaps, since streaming text is its own
+   progress signal. */
+.thinking {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 12px;
+  font-size: 0.9em;
+  opacity: 0.75;
+}
+
+.thinking .dots { display: inline-flex; gap: 3px; }
+.thinking .dots i {
+  width: 5px;
+  height: 5px;
+  border-radius: 50%;
+  background: var(--vscode-foreground);
+  animation: blink 1.2s infinite ease-in-out;
+}
+.thinking .dots i:nth-child(2) { animation-delay: 0.16s; }
+.thinking .dots i:nth-child(3) { animation-delay: 0.32s; }
+
+@keyframes blink {
+  0%, 80%, 100% { opacity: 0.25; }
+  40% { opacity: 1; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .thinking .dots i { animation: none; opacity: 0.6; }
+}
 
 /* Non-fatal, non-model messages: retries, context trimming. */
 .msg.notice {

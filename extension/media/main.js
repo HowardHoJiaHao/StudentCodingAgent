@@ -15,7 +15,39 @@ const budgetEl = document.getElementById('budget')
 let current = null // the assistant bubble currently streaming into
 let buffer = ''
 let repaintQueued = false
+let thinkingEl = null
 const toolRows = new Map()
+const changeBars = new Map()
+
+/**
+ * A visible sign the turn is alive. Streaming text is its own feedback, so
+ * this shows only while nothing else is happening — before the first token,
+ * and in the gaps between tool calls.
+ */
+function setThinking(on, label) {
+  if (!on) {
+    if (thinkingEl) thinkingEl.remove()
+    thinkingEl = null
+    return
+  }
+  if (!thinkingEl) {
+    thinkingEl = document.createElement('div')
+    thinkingEl.className = 'thinking'
+    const dots = document.createElement('span')
+    dots.className = 'dots'
+    dots.append(
+      document.createElement('i'),
+      document.createElement('i'),
+      document.createElement('i'),
+    )
+    const text = document.createElement('span')
+    text.className = 'thinking-text'
+    thinkingEl.append(dots, text)
+  }
+  thinkingEl.querySelector('.thinking-text').textContent = label || 'Working…'
+  log.appendChild(thinkingEl)
+  scroll(true)
+}
 
 function scheduleRender() {
   if (repaintQueued) return
@@ -200,6 +232,19 @@ function render(el, text) {
   })
 }
 
+// What the tool did, in the user's terms rather than the API's.
+const VERBS = {
+  write_file: 'Created',
+  edit_file: 'Edited',
+  read_file: 'Read',
+  list_dir: 'Listed',
+  glob_files: 'Searched',
+  grep: 'Searched',
+  run_command: 'Ran',
+}
+
+const basename = (p) => String(p || '').split(/[\\/]/).pop()
+
 /** Build a tool row. Shared by live streaming and transcript replay. */
 function toolRow(msg) {
   const row = document.createElement('div')
@@ -207,11 +252,14 @@ function toolRow(msg) {
 
   const name = document.createElement('span')
   name.className = 'tool-name'
-  name.textContent = msg.name
+  name.textContent = VERBS[msg.name] || msg.name
 
   const detail = document.createElement('span')
   detail.className = 'tool-detail'
-  detail.textContent = msg.detail || ''
+  // Shell commands need the whole line; for files the name alone is enough,
+  // with the full path on hover.
+  detail.textContent = msg.name === 'run_command' ? msg.detail || '' : basename(msg.detail)
+  if (msg.detail) detail.title = msg.detail
 
   const status = document.createElement('span')
   status.className = 'tool-status'
@@ -227,17 +275,93 @@ function setToolStatus(entry, status, stats) {
   entry.status.textContent = status === 'ok' ? '✓' : status === 'denied' ? 'denied' : '✕'
 
   if (!stats) return
-  const summary = document.createElement('span')
-  summary.className = 'tool-diff'
-  if (stats.created) {
-    summary.textContent = `new file +${stats.added}`
-  } else {
-    const parts = []
-    if (stats.added) parts.push(`+${stats.added}`)
-    if (stats.removed) parts.push(`−${stats.removed}`)
-    summary.textContent = parts.length ? parts.join(' ') : 'no change'
+  entry.row.insertBefore(diffBadge(stats), entry.status)
+}
+
+/** Git-style +added / −removed, coloured like a diff. */
+function diffBadge(stats) {
+  const badge = document.createElement('span')
+  badge.className = 'diff'
+
+  if (!stats.added && !stats.removed) {
+    badge.textContent = 'no change'
+    badge.classList.add('none')
+    return badge
   }
-  entry.row.insertBefore(summary, entry.status)
+
+  if (stats.added) {
+    const plus = document.createElement('span')
+    plus.className = 'diff-add'
+    plus.textContent = `+${stats.added}`
+    badge.appendChild(plus)
+  }
+  if (stats.removed) {
+    const minus = document.createElement('span')
+    minus.className = 'diff-del'
+    minus.textContent = `−${stats.removed}`
+    badge.appendChild(minus)
+  }
+  return badge
+}
+
+/**
+ * End-of-turn summary: every file touched, with a way back. Undo is offered
+ * only when a snapshot exists for all of them, so the button never half-works.
+ */
+function changesBar(msg, done) {
+  const box = bubble('changes')
+
+  const head = document.createElement('div')
+  head.className = 'changes-head'
+
+  const label = document.createElement('span')
+  label.className = 'changes-label'
+  label.textContent = `${msg.files.length} file${msg.files.length === 1 ? '' : 's'} changed`
+
+  head.append(label, diffBadge({ added: msg.added, removed: msg.removed }))
+
+  const spacer = document.createElement('span')
+  spacer.className = 'changes-spacer'
+  head.appendChild(spacer)
+
+  if (msg.canUndo && !done) {
+    const undo = document.createElement('button')
+    undo.className = 'inline'
+    undo.textContent = 'Undo'
+    undo.addEventListener('click', () => {
+      undo.disabled = true
+      undo.textContent = 'Undoing…'
+      vscode.postMessage({ type: 'undo', id: msg.id })
+    })
+    head.appendChild(undo)
+  } else if (done) {
+    const note = document.createElement('span')
+    note.className = 'changes-done'
+    note.textContent = 'reverted'
+    head.appendChild(note)
+  }
+
+  box.appendChild(head)
+
+  for (const file of msg.files) {
+    const row = document.createElement('div')
+    row.className = 'changes-file'
+
+    const verb = document.createElement('span')
+    verb.className = 'changes-verb'
+    verb.textContent = file.created ? 'new' : 'edited'
+
+    const name = document.createElement('span')
+    name.className = 'changes-name'
+    name.textContent = basename(file.path)
+    name.title = file.path
+
+    row.append(verb, name, diffBadge(file))
+    box.appendChild(row)
+  }
+
+  scroll(true)
+  return box
 }
 
 /**
@@ -327,6 +451,8 @@ function setBudget(spend, max) {
 function restore(entries, tokens) {
   log.textContent = ''
   toolRows.clear()
+  changeBars.clear()
+  thinkingEl = null
   current = null
 
   for (const entry of entries) {
@@ -342,8 +468,14 @@ function restore(entries, tokens) {
       // A question still unanswered when the window reloaded can't be revived —
       // its promise died with the old extension host — so show it as skipped.
       askBlock(entry, entry.answer == null ? '(unanswered)' : entry.answer)
+    } else if (entry.type === 'changes') {
+      // Snapshots live only in the extension host, so a reloaded window cannot
+      // honour Undo — show the summary without offering a button that would lie.
+      changeBars.set(entry.id, changesBar(entry, true))
     } else if (entry.type === 'error') {
       bubble('error').textContent = entry.text
+    } else if (entry.type === 'notice') {
+      bubble('notice').textContent = entry.text
     } else if (entry.type === 'status') {
       bubble('status').textContent = entry.text
     }
@@ -389,6 +521,8 @@ window.addEventListener('message', (event) => {
     }
 
     case 'assistantStart':
+      // Tokens are arriving; they are their own progress indicator.
+      setThinking(false)
       current = bubble('assistant')
       buffer = ''
       break
@@ -413,6 +547,7 @@ window.addEventListener('message', (event) => {
       break
 
     case 'tool': {
+      setThinking(false)
       toolRows.set(msg.id, toolRow(msg))
       current = null
       scroll(true)
@@ -424,6 +559,9 @@ window.addEventListener('message', (event) => {
       if (!entry) break
       setToolStatus(entry, msg.status, msg.stats)
       toolRows.delete(msg.id)
+      // The tool is done but the model has not replied yet — that gap is
+      // exactly where it looked frozen before.
+      setThinking(true, 'Thinking…')
       break
     }
 
@@ -438,6 +576,25 @@ window.addEventListener('message', (event) => {
       askBlock(msg, null)
       current = null
       break
+
+    case 'changes':
+      changeBars.set(msg.id, changesBar(msg, false))
+      current = null
+      break
+
+    case 'undone': {
+      const bar = changeBars.get(msg.id)
+      if (bar) {
+        const button = bar.querySelector('button')
+        if (button) {
+          const note = document.createElement('span')
+          note.className = 'changes-done'
+          note.textContent = 'reverted'
+          button.replaceWith(note)
+        }
+      }
+      break
+    }
 
     case 'budget':
       setBudget(msg.spend, msg.max)
@@ -481,6 +638,7 @@ window.addEventListener('message', (event) => {
     case 'busy':
       sendBtn.disabled = msg.value
       stopBtn.hidden = !msg.value
+      setThinking(msg.value, 'Thinking…')
       break
 
     case 'clear':

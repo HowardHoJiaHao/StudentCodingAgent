@@ -47,6 +47,17 @@ function lineDelta(before, after) {
   return { added, removed }
 }
 
+// Snapshots are held in memory for the length of a turn. Past this size the
+// cost outweighs the convenience, so those edits are simply not undoable
+// rather than bloating the extension host.
+const MAX_UNDO_BYTES = 1024 * 1024
+
+/** `before: null` means the file did not exist, so undo deletes it. */
+function undoEntry(target, before) {
+  if (before !== null && before.length > MAX_UNDO_BYTES) return null
+  return { path: target, before }
+}
+
 function safePath(root, target) {
   const resolved = path.resolve(root, target || '.')
   const relative = path.relative(root, resolved)
@@ -140,6 +151,7 @@ const TOOLS = [
       return {
         text: `Wrote ${content.split('\n').length} lines to ${target}`,
         stats,
+        undo: undoEntry(target, before),
       }
     },
   },
@@ -177,6 +189,7 @@ const TOOLS = [
       return {
         text: `Replaced ${replace_all ? occurrences : 1} occurrence(s) in ${target}`,
         stats: lineDelta(content, updated),
+        undo: undoEntry(target, content),
       }
     },
   },
