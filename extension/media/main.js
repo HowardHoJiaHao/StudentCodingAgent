@@ -51,6 +51,61 @@ function render(el, text) {
   })
 }
 
+/** Build a tool row. Shared by live streaming and transcript replay. */
+function toolRow(msg) {
+  const row = document.createElement('div')
+  row.className = 'tool running'
+
+  const name = document.createElement('span')
+  name.className = 'tool-name'
+  name.textContent = msg.name
+
+  const detail = document.createElement('span')
+  detail.className = 'tool-detail'
+  detail.textContent = msg.detail || ''
+
+  const status = document.createElement('span')
+  status.className = 'tool-status'
+  status.textContent = '…'
+
+  row.append(name, detail, status)
+  log.appendChild(row)
+  return { row, status }
+}
+
+function setToolStatus(entry, status) {
+  entry.row.className = `tool ${status}`
+  entry.status.textContent = status === 'ok' ? '✓' : status === 'denied' ? 'denied' : '✕'
+}
+
+/** Repaint a whole conversation after the webview was rebuilt. */
+function restore(entries, tokens) {
+  log.textContent = ''
+  toolRows.clear()
+  current = null
+
+  for (const entry of entries) {
+    if (entry.type === 'user') {
+      bubble('user').textContent = entry.text
+    } else if (entry.type === 'assistant') {
+      render(bubble('assistant'), entry.text)
+    } else if (entry.type === 'tool') {
+      const row = toolRow(entry)
+      if (entry.status && entry.status !== 'running') setToolStatus(row, entry.status)
+      else toolRows.set(entry.id, row)
+    } else if (entry.type === 'error') {
+      bubble('error').textContent = entry.text
+    } else if (entry.type === 'status') {
+      bubble('status').textContent = entry.text
+    }
+  }
+
+  if (tokens && (tokens.in || tokens.out)) {
+    usageEl.textContent = `${tokens.in.toLocaleString()} in · ${tokens.out.toLocaleString()} out`
+  }
+  scroll(true)
+}
+
 function send() {
   const text = input.value.trim()
   if (!text) return
@@ -100,24 +155,7 @@ window.addEventListener('message', (event) => {
       break
 
     case 'tool': {
-      const row = document.createElement('div')
-      row.className = 'tool running'
-
-      const name = document.createElement('span')
-      name.className = 'tool-name'
-      name.textContent = msg.name
-
-      const detail = document.createElement('span')
-      detail.className = 'tool-detail'
-      detail.textContent = msg.detail || ''
-
-      const status = document.createElement('span')
-      status.className = 'tool-status'
-      status.textContent = '…'
-
-      row.append(name, detail, status)
-      log.appendChild(row)
-      toolRows.set(msg.id, { row, status })
+      toolRows.set(msg.id, toolRow(msg))
       current = null
       scroll(true)
       break
@@ -126,12 +164,14 @@ window.addEventListener('message', (event) => {
     case 'toolEnd': {
       const entry = toolRows.get(msg.id)
       if (!entry) break
-      entry.row.className = `tool ${msg.status}`
-      entry.status.textContent =
-        msg.status === 'ok' ? '✓' : msg.status === 'denied' ? 'denied' : '✕'
+      setToolStatus(entry, msg.status)
       toolRows.delete(msg.id)
       break
     }
+
+    case 'restore':
+      restore(msg.entries || [], msg.tokens)
+      break
 
     case 'error': {
       const el = bubble('error')
@@ -176,3 +216,8 @@ window.addEventListener('message', (event) => {
       break
   }
 })
+
+// Ask for the transcript once our listener is attached. Anything the extension
+// posts before this point is dropped on the floor, so the replay has to be
+// pulled from here rather than pushed when the html is set.
+vscode.postMessage({ type: 'ready' })

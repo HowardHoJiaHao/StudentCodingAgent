@@ -1,8 +1,13 @@
 /**
- * VS Code integration: sidebar chat, key storage, permission prompts.
+ * VS Code integration: chat UI, key storage, permission prompts.
  *
  * The student's key lives in SecretStorage (the OS keychain) — never in
  * settings.json, which syncs to GitHub and gets committed by accident.
+ *
+ * The chat renders in two places from one provider: the sidebar view and an
+ * editor tab. Both share a transcript so they show the same conversation, and
+ * the transcript is persisted to workspaceState — opening a folder reloads the
+ * window and would otherwise throw the conversation away.
  */
 
 'use strict'
@@ -11,6 +16,9 @@ const vscode = require('vscode')
 const { runTurn, SYSTEM_PROMPT } = require('./loop')
 
 const KEY_SECRET = 'howardAgent.apiKey'
+const STATE_MESSAGES = 'howardAgent.messages'
+const STATE_TRANSCRIPT = 'howardAgent.transcript'
+const STATE_TOKENS = 'howardAgent.tokens'
 
 function config() {
   const cfg = vscode.workspace.getConfiguration('howardAgent')
@@ -31,42 +39,109 @@ function describe(name, args) {
 class ChatViewProvider {
   constructor(context) {
     this.context = context
-    this.view = null
-    this.messages = null
+    // Every live webview — the sidebar view and/or the editor panel. Messages
+    // broadcast to all of them so the two stay in step.
+    this.webviews = new Set()
+    this.panel = null
+
+    this.messages = context.workspaceState.get(STATE_MESSAGES) || null
+    this.transcript = context.workspaceState.get(STATE_TRANSCRIPT) || []
+    this.tokens = context.workspaceState.get(STATE_TOKENS) || { in: 0, out: 0 }
+
     this.always = new Set()
     this.controller = null
+    this.pending = '' // assistant text streaming into the current bubble
+  }
+
+  save() {
+    this.context.workspaceState.update(STATE_MESSAGES, this.messages)
+    this.context.workspaceState.update(STATE_TRANSCRIPT, this.transcript)
+    this.context.workspaceState.update(STATE_TOKENS, this.tokens)
+  }
+
+  post(message) {
+    for (const webview of this.webviews) webview.postMessage(message)
+  }
+
+  reset() {
+    this.messages = null
+    this.transcript = []
+    this.always.clear()
     this.tokens = { in: 0, out: 0 }
+    this.pending = ''
+    this.save()
+    this.post({ type: 'clear' })
+  }
+
+  /** Close off the assistant bubble being streamed, if any, into the transcript. */
+  flush() {
+    if (this.pending) {
+      this.transcript.push({ type: 'assistant', text: this.pending })
+      this.pending = ''
+    }
+  }
+
+  /**
+   * Wire a webview — used for both the sidebar view and the editor panel.
+   * Replay happens on the webview's own 'ready' message rather than straight
+   * after setting html: posts sent before its script attaches are dropped.
+   */
+  attach(webview) {
+    webview.options = {
+      enableScripts: true,
+      localResourceRoots: [this.context.extensionUri],
+    }
+    webview.html = this.html(webview)
+    this.webviews.add(webview)
+
+    webview.onDidReceiveMessage(async (msg) => {
+      if (msg.type === 'ready') {
+        webview.postMessage({
+          type: 'restore',
+          entries: this.transcript,
+          tokens: this.tokens,
+        })
+      } else if (msg.type === 'send') await this.send(msg.text)
+      else if (msg.type === 'stop' && this.controller) this.controller.abort()
+      else if (msg.type === 'signin') await vscode.commands.executeCommand('howardAgent.setKey')
+    })
+  }
+
+  resolveWebviewView(view) {
+    this.attach(view.webview)
+    view.onDidDispose(() => this.webviews.delete(view.webview))
+  }
+
+  /** Open the same chat as an editor tab, so it can sit beside your code. */
+  openInEditor() {
+    if (this.panel) {
+      this.panel.reveal()
+      return
+    }
+
+    this.panel = vscode.window.createWebviewPanel(
+      'howardAgent.chatPanel',
+      'Howard Agent',
+      vscode.ViewColumn.Beside,
+      {
+        enableScripts: true,
+        // Editor tabs are torn down when backgrounded unless we say otherwise.
+        retainContextWhenHidden: true,
+        localResourceRoots: [this.context.extensionUri],
+      },
+    )
+
+    this.attach(this.panel.webview)
+
+    this.panel.onDidDispose(() => {
+      if (this.panel) this.webviews.delete(this.panel.webview)
+      this.panel = null
+    })
   }
 
   get root() {
     const folders = vscode.workspace.workspaceFolders
     return folders && folders.length ? folders[0].uri.fsPath : null
-  }
-
-  post(message) {
-    if (this.view) this.view.webview.postMessage(message)
-  }
-
-  reset() {
-    this.messages = null
-    this.always.clear()
-    this.tokens = { in: 0, out: 0 }
-    this.post({ type: 'clear' })
-  }
-
-  resolveWebviewView(view) {
-    this.view = view
-    view.webview.options = {
-      enableScripts: true,
-      localResourceRoots: [this.context.extensionUri],
-    }
-    view.webview.html = this.html(view.webview)
-
-    view.webview.onDidReceiveMessage(async (msg) => {
-      if (msg.type === 'send') await this.send(msg.text)
-      else if (msg.type === 'stop' && this.controller) this.controller.abort()
-      else if (msg.type === 'signin') await vscode.commands.executeCommand('howardAgent.setKey')
-    })
   }
 
   async approve(tool, args) {
@@ -105,6 +180,7 @@ class ChatViewProvider {
     if (!this.messages) this.messages = [{ role: 'system', content: SYSTEM_PROMPT(root) }]
     this.messages.push({ role: 'user', content: text })
 
+    this.transcript.push({ type: 'user', text })
     this.post({ type: 'user', text })
     this.post({ type: 'busy', value: true })
 
@@ -117,15 +193,23 @@ class ChatViewProvider {
           started = true
           this.post({ type: 'assistantStart' })
         }
+        this.pending += chunk
         this.post({ type: 'delta', text: chunk })
       },
       onToolStart: (name, args) => {
         const id = `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
         started = false // any following text starts a fresh bubble
-        this.post({ type: 'tool', id, name, detail: describe(name, args) })
+        this.flush()
+        const detail = describe(name, args)
+        this.transcript.push({ type: 'tool', id, name, detail, status: 'running' })
+        this.post({ type: 'tool', id, name, detail })
         return id
       },
-      onToolEnd: (id, status) => this.post({ type: 'toolEnd', id, status }),
+      onToolEnd: (id, status) => {
+        const entry = this.transcript.find((e) => e.type === 'tool' && e.id === id)
+        if (entry) entry.status = status
+        this.post({ type: 'toolEnd', id, status })
+      },
       onUsage: (usage) => {
         this.tokens.in += usage.prompt_tokens || 0
         this.tokens.out += usage.completion_tokens || 0
@@ -146,10 +230,13 @@ class ChatViewProvider {
         approve: (tool, args) => this.approve(tool, args),
       })
     } catch (err) {
-      if (err.name === 'AbortError') this.post({ type: 'error', text: 'Stopped.' })
-      else this.post({ type: 'error', text: err.message })
+      const text = err.name === 'AbortError' ? 'Stopped.' : err.message
+      this.transcript.push({ type: 'error', text })
+      this.post({ type: 'error', text })
     } finally {
       this.controller = null
+      this.flush()
+      this.save()
       this.post({ type: 'busy', value: false })
       this.post({ type: 'assistantEnd' })
     }
@@ -195,7 +282,13 @@ function activate(context) {
   const provider = new ChatViewProvider(context)
 
   context.subscriptions.push(
-    vscode.window.registerWebviewViewProvider('howardAgent.chat', provider),
+    vscode.window.registerWebviewViewProvider('howardAgent.chat', provider, {
+      // Without this the sidebar webview is destroyed the moment you click
+      // Explorer, and the conversation appears to vanish.
+      webviewOptions: { retainContextWhenHidden: true },
+    }),
+
+    vscode.commands.registerCommand('howardAgent.openInEditor', () => provider.openInEditor()),
 
     vscode.commands.registerCommand('howardAgent.setKey', async () => {
       const key = await vscode.window.showInputBox({

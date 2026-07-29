@@ -44,12 +44,23 @@
         "title": "New Chat",
         "category": "Howard Agent",
         "icon": "$(add)"
+      },
+      {
+        "command": "howardAgent.openInEditor",
+        "title": "Open Chat in Editor",
+        "category": "Howard Agent",
+        "icon": "$(link-external)"
       }
     ],
     "menus": {
       "view/title": [
         {
           "command": "howardAgent.newChat",
+          "when": "view == howardAgent.chat",
+          "group": "navigation"
+        },
+        {
+          "command": "howardAgent.openInEditor",
           "when": "view == howardAgent.chat",
           "group": "navigation"
         }
