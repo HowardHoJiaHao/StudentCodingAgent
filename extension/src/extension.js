@@ -207,7 +207,8 @@ class ChatViewProvider {
     if (record) record.answer = value
     this.save()
 
-    this.post({ type: 'answered', id, value })
+    // No broadcast needed: the webview that was clicked updates itself, and the
+    // sidebar is a launcher rather than a second copy of the chat.
     entry.resolve(value)
   }
 
@@ -416,6 +417,9 @@ class ChatViewProvider {
 
     this.controller = new AbortController()
     let started = false
+    const startedAt = Date.now()
+    let steps = 0
+    let stopped = false
 
     const ui = {
       onText: (chunk) => {
@@ -430,6 +434,7 @@ class ChatViewProvider {
         const id = `${name}-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
         started = false // any following text starts a fresh bubble
         this.flush()
+        steps++
         const detail = describe(name, args)
         // Carried separately from `detail` so the UI knows this row points at a
         // real file and can make it clickable — grep's detail is a pattern, and
@@ -495,17 +500,27 @@ class ChatViewProvider {
         ask: (question, options) => this.ask(question, options),
       })
     } catch (err) {
-      const text = err.name === 'AbortError' ? 'Stopped.' : err.message
-      this.transcript.push({ type: 'error', text })
-      this.post({ type: 'error', text })
+      stopped = err.name === 'AbortError'
+      // "Stopped" is not a failure, and the done marker already says so.
+      if (!stopped) {
+        this.transcript.push({ type: 'error', text: err.message })
+        this.post({ type: 'error', text: err.message })
+      }
     } finally {
       this.controller = null
       this.flush()
 
+      // Order matters: assistantEnd closes the streaming bubble, then the done
+      // marker lands after it, then busy:false clears the working indicator.
+      this.post({ type: 'assistantEnd' })
+
+      const done = { type: 'done', ms: Date.now() - startedAt, steps, stopped }
+      this.transcript.push(done)
+      this.post(done)
+
       this.postEdits()
       this.save()
       this.post({ type: 'busy', value: false })
-      this.post({ type: 'assistantEnd' })
       this.refreshBudget()
     }
   }

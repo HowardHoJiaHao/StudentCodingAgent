@@ -17,19 +17,30 @@ let current = null // the assistant bubble currently streaming into
 let buffer = ''
 let repaintQueued = false
 let thinkingEl = null
+let thinkingTimer = null
+let turnStart = null
 const toolRows = new Map()
+
+const secs = (ms) => {
+  const total = Math.round(ms / 1000)
+  return total < 60 ? `${total}s` : `${Math.floor(total / 60)}m ${total % 60}s`
+}
 
 /**
  * A visible sign the turn is alive. Streaming text is its own feedback, so
  * this shows only while nothing else is happening — before the first token,
- * and in the gaps between tool calls.
+ * and in the gaps between tool calls. The clock keeps running across those
+ * gaps so it reads as one turn rather than restarting at each step.
  */
 function setThinking(on, label) {
   if (!on) {
+    clearInterval(thinkingTimer)
+    thinkingTimer = null
     if (thinkingEl) thinkingEl.remove()
     thinkingEl = null
     return
   }
+
   if (!thinkingEl) {
     thinkingEl = document.createElement('div')
     thinkingEl.className = 'thinking'
@@ -42,9 +53,20 @@ function setThinking(on, label) {
     )
     const text = document.createElement('span')
     text.className = 'thinking-text'
-    thinkingEl.append(dots, text)
+    const clock = document.createElement('span')
+    clock.className = 'thinking-clock'
+    thinkingEl.append(dots, text, clock)
   }
+
   thinkingEl.querySelector('.thinking-text').textContent = label || 'Working…'
+
+  const tick = () => {
+    if (!thinkingEl || !turnStart) return
+    thinkingEl.querySelector('.thinking-clock').textContent = secs(Date.now() - turnStart)
+  }
+  tick()
+  if (!thinkingTimer) thinkingTimer = setInterval(tick, 1000)
+
   log.appendChild(thinkingEl)
   scroll(true)
 }
@@ -478,6 +500,29 @@ function askBlock(msg, answered) {
   return el
 }
 
+/**
+ * An explicit end-of-turn line. Without one, a turn that finishes on a tool
+ * call rather than prose just stops, and there is no way to tell "finished"
+ * from "still working".
+ */
+function doneMarker(msg) {
+  const el = bubble('done')
+
+  const tick = document.createElement('span')
+  tick.className = 'done-tick'
+  tick.textContent = msg.stopped ? '■' : '✓'
+
+  const text = document.createElement('span')
+  const bits = [msg.stopped ? 'Stopped' : 'Done']
+  if (msg.ms) bits.push(secs(msg.ms))
+  if (msg.steps > 1) bits.push(`${msg.steps} steps`)
+  text.textContent = bits.join(' · ')
+
+  el.append(tick, text)
+  scroll(true)
+  return el
+}
+
 /** Budget spent against the cap, so a student sees the wall before they hit it. */
 function setBudget(spend, max) {
   if (max == null) {
@@ -511,6 +556,8 @@ function restore(entries, tokens) {
       // A question still unanswered when the window reloaded can't be revived —
       // its promise died with the old extension host — so show it as skipped.
       askBlock(entry, entry.answer == null ? '(unanswered)' : entry.answer)
+    } else if (entry.type === 'done') {
+      doneMarker(entry)
     } else if (entry.type === 'error') {
       bubble('error').textContent = entry.text
     } else if (entry.type === 'notice') {
@@ -662,7 +709,14 @@ window.addEventListener('message', (event) => {
     case 'busy':
       sendBtn.disabled = msg.value
       stopBtn.hidden = !msg.value
+      sendBtn.textContent = msg.value ? 'Working…' : 'Send'
+      if (msg.value) turnStart = Date.now()
       setThinking(msg.value, 'Thinking…')
+      if (!msg.value) turnStart = null
+      break
+
+    case 'done':
+      doneMarker(msg)
       break
 
     case 'clear':
