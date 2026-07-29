@@ -258,6 +258,25 @@ textarea:focus {
   white-space: nowrap;
 }
 
+/* Clickable workspace path. Long paths truncate from the left so the filename
+   — the part you are scanning for — stays visible. */
+.file-link {
+  cursor: pointer;
+  color: var(--vscode-textLink-foreground);
+  font-family: var(--vscode-editor-font-family);
+  direction: rtl;
+  text-align: left;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.file-link:hover { color: var(--vscode-textLink-activeForeground); text-decoration: underline; }
+.file-link:focus-visible {
+  outline: 1px solid var(--vscode-focusBorder);
+  outline-offset: 1px;
+  border-radius: 2px;
+}
+
 /* Working indicator: shown only in the gaps, since streaming text is its own
    progress signal. */
 .thinking {

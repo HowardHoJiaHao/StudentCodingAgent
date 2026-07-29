@@ -27,12 +27,25 @@ function truncate(text) {
  * is a fraction of the cost. `before` is null for a newly created file.
  */
 function lineDelta(before, after) {
-  if (before === after) return { added: 0, removed: 0 }
+  if (before === after) return { added: 0, removed: 0, firstLine: 1 }
   const afterLines = after.split('\n')
-  if (before === null) return { added: afterLines.length, removed: 0 }
+  if (before === null) return { added: afterLines.length, removed: 0, firstLine: 1 }
+
+  const beforeLines = before.split('\n')
+
+  // Where the file first stops matching — what you want to be looking at when
+  // the editor opens, rather than the top of the file.
+  let firstLine = 0
+  while (
+    firstLine < beforeLines.length &&
+    firstLine < afterLines.length &&
+    beforeLines[firstLine] === afterLines[firstLine]
+  ) {
+    firstLine++
+  }
 
   const counts = new Map()
-  for (const line of before.split('\n')) counts.set(line, (counts.get(line) || 0) + 1)
+  for (const line of beforeLines) counts.set(line, (counts.get(line) || 0) + 1)
 
   let added = 0
   for (const line of afterLines) {
@@ -44,7 +57,7 @@ function lineDelta(before, after) {
   let removed = 0
   for (const remaining of counts.values()) removed += remaining
 
-  return { added, removed }
+  return { added, removed, firstLine: firstLine + 1 }
 }
 
 // Snapshots are held in memory for the length of a turn. Past this size the

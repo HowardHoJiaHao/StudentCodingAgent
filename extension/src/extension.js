@@ -95,6 +95,39 @@ class ChatViewProvider {
   }
 
   /**
+   * Open a file the agent touched, at the line it changed.
+   *
+   * Column One explicitly: the chat sits Beside, so without this the file
+   * would replace the chat rather than appear next to it.
+   */
+  async openFile(relative, line) {
+    const root = this.root
+    if (!root) return
+
+    const uri = vscode.Uri.joinPath(vscode.Uri.file(root), relative)
+    try {
+      const document = await vscode.workspace.openTextDocument(uri)
+      const editor = await vscode.window.showTextDocument(document, {
+        viewColumn: vscode.ViewColumn.One,
+        preview: false,
+      })
+
+      if (line) {
+        // Clamp: the file may have been edited by hand since.
+        const index = Math.min(Math.max(0, line - 1), Math.max(0, document.lineCount - 1))
+        const position = new vscode.Position(index, 0)
+        editor.selection = new vscode.Selection(position, position)
+        editor.revealRange(
+          new vscode.Range(position, position),
+          vscode.TextEditorRevealType.InCenter,
+        )
+      }
+    } catch {
+      vscode.window.showWarningMessage(`Howard Agent: can't open ${relative} — it may have moved.`)
+    }
+  }
+
+  /**
    * Put every file back as it was before this turn. Later edits to the same
    * file overwrite earlier snapshots in the map, so the value held is always
    * the state from before the turn began.
@@ -222,7 +255,8 @@ class ChatViewProvider {
         await vscode.workspace
           .getConfiguration('howardAgent')
           .update('autoApprove', msg.value, vscode.ConfigurationTarget.Global)
-      } else if (msg.type === 'undo') await this.undo(msg.id)
+      } else if (msg.type === 'open') await this.openFile(msg.path, msg.line)
+      else if (msg.type === 'undo') await this.undo(msg.id)
       else if (msg.type === 'answer') this.answer(msg.id, msg.value)
       else if (msg.type === 'send') await this.send(msg.text)
       else if (msg.type === 'stop') {
@@ -379,8 +413,12 @@ class ChatViewProvider {
         started = false // any following text starts a fresh bubble
         this.flush()
         const detail = describe(name, args)
-        this.transcript.push({ type: 'tool', id, name, detail, status: 'running' })
-        this.post({ type: 'tool', id, name, detail })
+        // Carried separately from `detail` so the UI knows this row points at a
+        // real file and can make it clickable — grep's detail is a pattern, and
+        // run_command's is a shell line.
+        const file = args && typeof args.path === 'string' ? args.path : null
+        this.transcript.push({ type: 'tool', id, name, detail, file, status: 'running' })
+        this.post({ type: 'tool', id, name, detail, file })
         return id
       },
       onToolEnd: (id, status, _result, stats) => {
@@ -396,10 +434,17 @@ class ChatViewProvider {
         // "before the last of several edits to the same file".
         if (!snapshots.has(entry.path)) snapshots.set(entry.path, entry.before)
 
-        const running = touched.get(entry.path) || { added: 0, removed: 0, created: false }
+        const running = touched.get(entry.path) || {
+          added: 0,
+          removed: 0,
+          created: false,
+          firstLine: null,
+        }
         running.added += (stats && stats.added) || 0
         running.removed += (stats && stats.removed) || 0
         running.created = running.created || !!(stats && stats.created)
+        // Earliest edit wins — that is the line to land on when the file opens.
+        if (!running.firstLine && stats && stats.firstLine) running.firstLine = stats.firstLine
         touched.set(entry.path, running)
       },
       onRetry: (attempt, max) =>

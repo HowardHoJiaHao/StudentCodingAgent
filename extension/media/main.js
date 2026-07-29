@@ -243,7 +243,31 @@ const VERBS = {
   run_command: 'Ran',
 }
 
-const basename = (p) => String(p || '').split(/[\\/]/).pop()
+/**
+ * A workspace path that opens the file at the line that changed.
+ * The line is set on the element rather than captured, because it is only
+ * known once the tool finishes — the row is drawn when it starts.
+ */
+function fileLink(path, line) {
+  const el = document.createElement('span')
+  el.className = 'file-link'
+  el.textContent = path
+  el.title = `${path} — click to open`
+  el.tabIndex = 0
+  el.dataset.line = line || ''
+
+  const open = () =>
+    vscode.postMessage({ type: 'open', path, line: Number(el.dataset.line) || null })
+
+  el.addEventListener('click', open)
+  el.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter' || event.key === ' ') {
+      event.preventDefault()
+      open()
+    }
+  })
+  return el
+}
 
 /** Build a tool row. Shared by live streaming and transcript replay. */
 function toolRow(msg) {
@@ -254,12 +278,17 @@ function toolRow(msg) {
   name.className = 'tool-name'
   name.textContent = VERBS[msg.name] || msg.name
 
-  const detail = document.createElement('span')
-  detail.className = 'tool-detail'
-  // Shell commands need the whole line; for files the name alone is enough,
-  // with the full path on hover.
-  detail.textContent = msg.name === 'run_command' ? msg.detail || '' : basename(msg.detail)
-  if (msg.detail) detail.title = msg.detail
+  // A row that names a real file gets a link; grep patterns and shell lines
+  // are shown as plain text.
+  const detail = msg.file
+    ? fileLink(msg.file, null)
+    : (() => {
+        const span = document.createElement('span')
+        span.textContent = msg.detail || ''
+        if (msg.detail) span.title = msg.detail
+        return span
+      })()
+  detail.classList.add('tool-detail')
 
   const status = document.createElement('span')
   status.className = 'tool-status'
@@ -267,7 +296,7 @@ function toolRow(msg) {
 
   row.append(name, detail, status)
   log.appendChild(row)
-  return { row, status }
+  return { row, status, link: msg.file ? detail : null }
 }
 
 function setToolStatus(entry, status, stats) {
@@ -275,6 +304,8 @@ function setToolStatus(entry, status, stats) {
   entry.status.textContent = status === 'ok' ? '✓' : status === 'denied' ? 'denied' : '✕'
 
   if (!stats) return
+  // Now that the edit has run we know where it landed, so the link can jump there.
+  if (entry.link && stats.firstLine) entry.link.dataset.line = String(stats.firstLine)
   entry.row.insertBefore(diffBadge(stats), entry.status)
 }
 
@@ -351,10 +382,8 @@ function changesBar(msg, done) {
     verb.className = 'changes-verb'
     verb.textContent = file.created ? 'new' : 'edited'
 
-    const name = document.createElement('span')
-    name.className = 'changes-name'
-    name.textContent = basename(file.path)
-    name.title = file.path
+    const name = fileLink(file.path, file.firstLine)
+    name.classList.add('changes-name')
 
     row.append(verb, name, diffBadge(file))
     box.appendChild(row)
