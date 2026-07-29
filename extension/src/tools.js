@@ -19,6 +19,34 @@ function truncate(text) {
   return `${text.slice(0, MAX_OUTPUT)}\n\n[truncated ${text.length - MAX_OUTPUT} more characters]`
 }
 
+/**
+ * Added/removed line counts for a change, for the "+12 −3" summary in the chat.
+ *
+ * A line-multiset difference, not a real LCS diff: a moved line shows as
+ * neither added nor removed, which is what you want in a one-line summary and
+ * is a fraction of the cost. `before` is null for a newly created file.
+ */
+function lineDelta(before, after) {
+  if (before === after) return { added: 0, removed: 0 }
+  const afterLines = after.split('\n')
+  if (before === null) return { added: afterLines.length, removed: 0 }
+
+  const counts = new Map()
+  for (const line of before.split('\n')) counts.set(line, (counts.get(line) || 0) + 1)
+
+  let added = 0
+  for (const line of afterLines) {
+    const remaining = counts.get(line) || 0
+    if (remaining > 0) counts.set(line, remaining - 1)
+    else added++
+  }
+
+  let removed = 0
+  for (const remaining of counts.values()) removed += remaining
+
+  return { added, removed }
+}
+
 function safePath(root, target) {
   const resolved = path.resolve(root, target || '.')
   const relative = path.relative(root, resolved)
@@ -102,9 +130,17 @@ const TOOLS = [
     },
     async run({ path: target, content }, { root }) {
       const resolved = safePath(root, target)
+      const before = await fs.readFile(resolved, 'utf8').catch(() => null)
+
       await fs.mkdir(path.dirname(resolved), { recursive: true })
       await fs.writeFile(resolved, content, 'utf8')
-      return `Wrote ${content.split('\n').length} lines to ${target}`
+
+      const stats = lineDelta(before, content)
+      stats.created = before === null
+      return {
+        text: `Wrote ${content.split('\n').length} lines to ${target}`,
+        stats,
+      }
     },
   },
   {
@@ -138,7 +174,10 @@ const TOOLS = [
         ? content.split(old_string).join(new_string)
         : content.replace(old_string, new_string)
       await fs.writeFile(resolved, updated, 'utf8')
-      return `Replaced ${replace_all ? occurrences : 1} occurrence(s) in ${target}`
+      return {
+        text: `Replaced ${replace_all ? occurrences : 1} occurrence(s) in ${target}`,
+        stats: lineDelta(content, updated),
+      }
     },
   },
   {

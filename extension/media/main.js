@@ -10,6 +10,7 @@ const sendBtn = document.getElementById('send')
 const stopBtn = document.getElementById('stop')
 const usageEl = document.getElementById('usage')
 const approveEl = document.getElementById('approve')
+const budgetEl = document.getElementById('budget')
 
 let current = null // the assistant bubble currently streaming into
 let buffer = ''
@@ -38,12 +39,26 @@ function render(el, text) {
 
   parts.forEach((part, i) => {
     if (i % 2 === 1) {
+      const wrap = document.createElement('div')
+      wrap.className = 'code-wrap'
+
       const pre = document.createElement('pre')
       const code = document.createElement('code')
       // Drop a leading language tag on the fence line.
       code.textContent = part.replace(/^[a-zA-Z0-9_+-]*\n/, '')
       pre.appendChild(code)
-      el.appendChild(pre)
+
+      const copy = document.createElement('button')
+      copy.className = 'copy'
+      copy.textContent = 'Copy'
+      copy.addEventListener('click', () => {
+        navigator.clipboard.writeText(code.textContent)
+        copy.textContent = 'Copied'
+        setTimeout(() => (copy.textContent = 'Copy'), 1200)
+      })
+
+      wrap.append(pre, copy)
+      el.appendChild(wrap)
     } else if (part) {
       const span = document.createElement('span')
       span.textContent = part
@@ -74,9 +89,35 @@ function toolRow(msg) {
   return { row, status }
 }
 
-function setToolStatus(entry, status) {
+function setToolStatus(entry, status, stats) {
   entry.row.className = `tool ${status}`
   entry.status.textContent = status === 'ok' ? '✓' : status === 'denied' ? 'denied' : '✕'
+
+  if (!stats) return
+  const summary = document.createElement('span')
+  summary.className = 'tool-diff'
+  if (stats.created) {
+    summary.textContent = `new file +${stats.added}`
+  } else {
+    const parts = []
+    if (stats.added) parts.push(`+${stats.added}`)
+    if (stats.removed) parts.push(`−${stats.removed}`)
+    summary.textContent = parts.length ? parts.join(' ') : 'no change'
+  }
+  entry.row.insertBefore(summary, entry.status)
+}
+
+/** Budget spent against the cap, so a student sees the wall before they hit it. */
+function setBudget(spend, max) {
+  if (max == null) {
+    budgetEl.textContent = `$${spend.toFixed(4)}`
+    budgetEl.className = ''
+    return
+  }
+  const left = Math.max(0, max - spend)
+  budgetEl.textContent = `$${left.toFixed(2)} left`
+  budgetEl.className = left <= 0 ? 'spent' : left / max < 0.15 ? 'low' : ''
+  budgetEl.title = `$${spend.toFixed(4)} of $${max.toFixed(2)} used`
 }
 
 /** Repaint a whole conversation after the webview was rebuilt. */
@@ -92,7 +133,7 @@ function restore(entries, tokens) {
       render(bubble('assistant'), entry.text)
     } else if (entry.type === 'tool') {
       const row = toolRow(entry)
-      if (entry.status && entry.status !== 'running') setToolStatus(row, entry.status)
+      if (entry.status && entry.status !== 'running') setToolStatus(row, entry.status, entry.stats)
       else toolRows.set(entry.id, row)
     } else if (entry.type === 'error') {
       bubble('error').textContent = entry.text
@@ -169,10 +210,21 @@ window.addEventListener('message', (event) => {
     case 'toolEnd': {
       const entry = toolRows.get(msg.id)
       if (!entry) break
-      setToolStatus(entry, msg.status)
+      setToolStatus(entry, msg.status, msg.stats)
       toolRows.delete(msg.id)
       break
     }
+
+    case 'notice': {
+      const el = bubble('notice')
+      el.textContent = msg.text
+      current = null
+      break
+    }
+
+    case 'budget':
+      setBudget(msg.spend, msg.max)
+      break
 
     case 'restore':
       restore(msg.entries || [], msg.tokens)

@@ -14,6 +14,7 @@
 
 const vscode = require('vscode')
 const { runTurn, SYSTEM_PROMPT } = require('./loop')
+const { fetchBudget } = require('./llm')
 
 const KEY_SECRET = 'howardAgent.apiKey'
 const STATE_MESSAGES = 'howardAgent.messages'
@@ -38,6 +39,30 @@ function config() {
     model: cfg.get('model'),
     autoApprove: approvalMode(cfg.get('autoApprove')),
   }
+}
+
+/**
+ * What the student is looking at right now. The agent would otherwise have to
+ * grep the workspace to rediscover it — slower, and it spends their budget.
+ * Kept small on purpose: a path always, the selection only when there is one.
+ */
+function activeFileContext(root) {
+  const editor = vscode.window.activeTextEditor
+  if (!editor || editor.document.uri.scheme !== 'file') return null
+
+  const full = editor.document.uri.fsPath
+  const relative = full.startsWith(root) ? full.slice(root.length).replace(/^[\\/]/, '') : full
+
+  const selection = editor.selection
+  if (selection && !selection.isEmpty) {
+    const text = editor.document.getText(selection)
+    const capped = text.length > 4000 ? `${text.slice(0, 4000)}\n[selection truncated]` : text
+    return (
+      `The user is looking at ${relative}, lines ${selection.start.line + 1}-` +
+      `${selection.end.line + 1}, with this selected:\n\n${capped}`
+    )
+  }
+  return `The user currently has ${relative} open in the editor.`
 }
 
 function describe(name, args) {
@@ -113,6 +138,7 @@ class ChatViewProvider {
           tokens: this.tokens,
           approval: config().autoApprove,
         })
+        this.refreshBudget()
       } else if (msg.type === 'approval') {
         // Write it back to settings rather than holding it in the webview, so
         // the choice survives a reload and stays visible in the Settings UI.
@@ -226,6 +252,12 @@ class ChatViewProvider {
     }
 
     if (!this.messages) this.messages = [{ role: 'system', content: SYSTEM_PROMPT(root) }]
+
+    // Attached as a system message rather than folded into the user's text, so
+    // the transcript shows what they typed and nothing else.
+    const context = activeFileContext(root)
+    if (context) this.messages.push({ role: 'system', content: context })
+
     this.messages.push({ role: 'user', content: text })
 
     this.transcript.push({ type: 'user', text })
@@ -253,11 +285,21 @@ class ChatViewProvider {
         this.post({ type: 'tool', id, name, detail })
         return id
       },
-      onToolEnd: (id, status) => {
+      onToolEnd: (id, status, _result, stats) => {
         const entry = this.transcript.find((e) => e.type === 'tool' && e.id === id)
-        if (entry) entry.status = status
-        this.post({ type: 'toolEnd', id, status })
+        if (entry) {
+          entry.status = status
+          if (stats) entry.stats = stats
+        }
+        this.post({ type: 'toolEnd', id, status, stats })
       },
+      onRetry: (attempt, max) =>
+        this.post({ type: 'notice', text: `Upstream busy — retrying (${attempt}/${max})…` }),
+      onCompact: (trimmed, approxTokens) =>
+        this.post({
+          type: 'notice',
+          text: `Trimmed ${trimmed} older tool result${trimmed === 1 ? '' : 's'} to stay within context (~${approxTokens.toLocaleString()} tokens).`,
+        }),
       onUsage: (usage) => {
         this.tokens.in += usage.prompt_tokens || 0
         this.tokens.out += usage.completion_tokens || 0
@@ -287,7 +329,16 @@ class ChatViewProvider {
       this.save()
       this.post({ type: 'busy', value: false })
       this.post({ type: 'assistantEnd' })
+      this.refreshBudget()
     }
+  }
+
+  /** Best-effort: the budget line is a nicety and must never break a turn. */
+  async refreshBudget() {
+    const apiKey = await this.context.secrets.get(KEY_SECRET)
+    if (!apiKey) return
+    const budget = await fetchBudget(config().endpoint, apiKey)
+    if (budget) this.post({ type: 'budget', ...budget })
   }
 
   /** Sidebar contents: a signpost to the tab, in case it gets closed. */
@@ -359,6 +410,7 @@ class ChatViewProvider {
         <option value="edits">Auto-approve edits</option>
         <option value="always">Auto-approve all</option>
       </select>
+      <span id="budget"></span>
       <span id="usage"></span>
       <button id="stop" hidden>Stop</button>
       <button id="send">Send</button>

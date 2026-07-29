@@ -6,35 +6,111 @@
 
 'use strict'
 
-async function streamChat({ endpoint, apiKey, model, messages, tools, signal, onText }) {
-  let response
-  try {
-    response = await fetch(`${endpoint.replace(/\/+$/, '')}/chat/completions`, {
-      method: 'POST',
-      signal,
-      headers: {
-        'Content-Type': 'application/json',
-        Authorization: `Bearer ${apiKey}`,
-      },
-      body: JSON.stringify({
-        model,
-        messages,
-        stream: true,
-        stream_options: { include_usage: true },
-        ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
-      }),
-    })
-  } catch (err) {
-    if (err.name === 'AbortError') throw err
-    throw new Error(`Can't reach ${endpoint}. Check the endpoint setting and your connection.`)
-  }
+const MAX_ATTEMPTS = 3
 
-  if (!response.ok) {
+const sleep = (ms, signal) =>
+  new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms)
+    if (signal) {
+      signal.addEventListener(
+        'abort',
+        () => {
+          clearTimeout(timer)
+          const err = new Error('Aborted')
+          err.name = 'AbortError'
+          reject(err)
+        },
+        { once: true },
+      )
+    }
+  })
+
+/** Transient upstream failures. A 429 is the common one when a class all runs at once. */
+const retryable = (status) => status === 429 || status === 408 || status >= 500
+
+async function streamChat({ endpoint, apiKey, model, messages, tools, signal, onText, onRetry }) {
+  let lastError
+
+  for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
+    let response
+    try {
+      response = await fetch(`${endpoint.replace(/\/+$/, '')}/chat/completions`, {
+        method: 'POST',
+        signal,
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${apiKey}`,
+        },
+        body: JSON.stringify({
+          model,
+          messages,
+          stream: true,
+          stream_options: { include_usage: true },
+          ...(tools && tools.length ? { tools, tool_choice: 'auto' } : {}),
+        }),
+      })
+    } catch (err) {
+      if (err.name === 'AbortError') throw err
+      lastError = new Error(
+        `Can't reach ${endpoint}. Check the endpoint setting and your connection.`,
+      )
+      // A dropped connection is worth one more go; a wrong URL is not, but we
+      // can't tell them apart, so let the attempt ceiling bound it.
+      if (attempt < MAX_ATTEMPTS) {
+        if (onRetry) onRetry(attempt, MAX_ATTEMPTS)
+        await sleep(backoffMs(attempt, null), signal)
+        continue
+      }
+      throw lastError
+    }
+
+    if (response.ok) return readStream(response, onText)
+
     const body = await response.text().catch(() => '')
-    throw new Error(explainStatus(response.status, body))
+    lastError = new Error(explainStatus(response.status, body))
+
+    // Only retry before any tokens have been emitted — once the stream has
+    // started, re-sending would duplicate output.
+    if (retryable(response.status) && attempt < MAX_ATTEMPTS) {
+      if (onRetry) onRetry(attempt, MAX_ATTEMPTS)
+      await sleep(backoffMs(attempt, response.headers.get('retry-after')), signal)
+      continue
+    }
+    throw lastError
   }
 
-  return readStream(response, onText)
+  throw lastError
+}
+
+/** Exponential backoff with jitter, capped, honouring Retry-After when sent. */
+function backoffMs(attempt, retryAfter) {
+  const header = Number(retryAfter)
+  if (Number.isFinite(header) && header > 0) return Math.min(header * 1000, 10000)
+  return Math.min(500 * 2 ** (attempt - 1), 8000) + Math.floor(Math.random() * 250)
+}
+
+/**
+ * The student's own budget, for display. The proxy is at <endpoint>/v1, while
+ * key/info sits at the root. Returns null on any failure — this is a nicety,
+ * and must never break a turn.
+ */
+async function fetchBudget(endpoint, apiKey, signal) {
+  try {
+    const base = endpoint.replace(/\/+$/, '').replace(/\/v1$/, '')
+    const response = await fetch(`${base}/key/info`, {
+      headers: { Authorization: `Bearer ${apiKey}` },
+      signal,
+    })
+    if (!response.ok) return null
+    const body = await response.json()
+    const info = body.info || body
+    const spend = Number(info.spend)
+    const max = info.max_budget == null ? null : Number(info.max_budget)
+    if (!Number.isFinite(spend)) return null
+    return { spend, max: Number.isFinite(max) ? max : null }
+  } catch {
+    return null
+  }
 }
 
 /** Turn proxy errors into something a student can act on. */
@@ -109,4 +185,4 @@ async function readStream(response, onText) {
   return { content, toolCalls: toolCalls.filter(Boolean), usage }
 }
 
-module.exports = { streamChat }
+module.exports = { streamChat, fetchBudget }
