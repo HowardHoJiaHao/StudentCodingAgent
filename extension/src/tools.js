@@ -91,6 +91,9 @@ const TOOLS = [
   {
     name: 'write_file',
     mutates: true,
+    // Goes through safePath, so it cannot write outside the workspace. That
+    // bound is what lets autoApprove: "edits" skip the prompt for this tool.
+    sandboxed: true,
     description: 'Create a file or overwrite an existing one.',
     parameters: {
       type: 'object',
@@ -107,6 +110,7 @@ const TOOLS = [
   {
     name: 'edit_file',
     mutates: true,
+    sandboxed: true,
     description:
       'Replace an exact string in a file. old_string must match byte-for-byte and be unique ' +
       'unless replace_all is set. Prefer this over write_file for existing files.',
@@ -207,6 +211,11 @@ const TOOLS = [
   {
     name: 'run_command',
     mutates: true,
+    // Deliberately NOT sandboxed: cwd only sets where the command starts. It
+    // can cd out, use absolute paths, or reach the network, with the user's
+    // full privileges — so this one always needs a human, whatever
+    // autoApprove says short of "always".
+    sandboxed: false,
     description: 'Run a shell command in the workspace. Use for builds, tests, and git.',
     parameters: {
       type: 'object',

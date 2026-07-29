@@ -20,12 +20,23 @@ const STATE_MESSAGES = 'howardAgent.messages'
 const STATE_TRANSCRIPT = 'howardAgent.transcript'
 const STATE_TOKENS = 'howardAgent.tokens'
 
+/**
+ * autoApprove was a boolean before it became a three-way choice. A settings.json
+ * written by the old build still holds true/false, so map those rather than
+ * silently falling through to the default and changing behaviour on upgrade.
+ */
+function approvalMode(value) {
+  if (value === true) return 'always'
+  if (value === false || value == null) return 'never'
+  return value === 'edits' || value === 'always' ? value : 'never'
+}
+
 function config() {
   const cfg = vscode.workspace.getConfiguration('howardAgent')
   return {
     endpoint: cfg.get('endpoint'),
     model: cfg.get('model'),
-    autoApprove: cfg.get('autoApprove'),
+    autoApprove: approvalMode(cfg.get('autoApprove')),
   }
 }
 
@@ -145,12 +156,26 @@ class ChatViewProvider {
   }
 
   async approve(tool, args) {
-    if (!tool.mutates || config().autoApprove || this.always.has(tool.name)) return true
+    if (!tool.mutates) return true
+
+    const mode = config().autoApprove
+    if (mode === 'always') return true
+    // "edits" trusts only the tools safePath() confines to the workspace.
+    // run_command is not one of them, so it still asks.
+    if (mode === 'edits' && tool.sandboxed) return true
+    if (this.always.has(tool.name)) return true
 
     const detail = describe(tool.name, args)
     const choice = await vscode.window.showWarningMessage(
       `Allow ${tool.name}?`,
-      { modal: true, detail: detail || JSON.stringify(args).slice(0, 300) },
+      {
+        modal: true,
+        detail: tool.sandboxed
+          ? detail || JSON.stringify(args).slice(0, 300)
+          : `${detail || JSON.stringify(args).slice(0, 300)}\n\n` +
+            'Shell commands are not restricted to this folder and run with your ' +
+            'full privileges.',
+      },
       'Allow',
       'Always in this chat',
     )

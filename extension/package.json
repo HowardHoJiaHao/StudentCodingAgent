@@ -84,9 +84,19 @@
           ]
         },
         "howardAgent.autoApprove": {
-          "type": "boolean",
-          "default": false,
-          "markdownDescription": "Run file edits and shell commands **without asking**. Only enable in a repo you can `git checkout`."
+          "type": "string",
+          "default": "never",
+          "enum": [
+            "never",
+            "edits",
+            "always"
+          ],
+          "markdownEnumDescriptions": [
+            "Ask before every file edit and shell command.",
+            "Auto-approve file edits — they cannot escape the open folder — but always ask before running a shell command.",
+            "Never ask. Shell commands run unprompted with your full privileges; only use in a repo you can `git checkout`."
+          ],
+          "markdownDescription": "When to skip the approval prompt.\n\n- `never` — ask every time.\n- `edits` — auto-approve `write_file`/`edit_file`, which are confined to the open folder; still ask for `run_command`.\n- `always` — approve everything, **including unsandboxed shell commands**."
         }
       }
     }
