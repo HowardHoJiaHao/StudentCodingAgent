@@ -88,10 +88,33 @@ class ChatViewProvider {
     this.controller = null
     this.pending = '' // assistant text streaming into the current bubble
     this.asks = new Map() // question id -> { resolve, reject }
-    // Snapshots for Undo, in memory only: they can be large, and offering to
-    // revert a file from a previous session would be a lie once it has been
-    // edited by hand since.
-    this.undoable = new Map() // batch id -> [{ path, before }]
+    // Edits accumulate across turns until the user keeps or reverts them, so
+    // the bar reflects everything outstanding rather than only the last turn.
+    // Snapshots are in memory only: offering to revert a file from a previous
+    // session would be a lie once it has been edited by hand since.
+    this.edits = { files: new Map(), snapshots: new Map() }
+  }
+
+  /** Push the outstanding-edits bar. An empty file list hides it. */
+  postEdits() {
+    const files = [...this.edits.files].map(([path, stats]) => ({ path, ...stats }))
+    const totals = files.reduce(
+      (acc, f) => ({ added: acc.added + f.added, removed: acc.removed + f.removed }),
+      { added: 0, removed: 0 },
+    )
+    this.post({
+      type: 'edits',
+      files,
+      ...totals,
+      // Withhold Undo unless every file can be restored, so it never half-works.
+      canUndo: files.length > 0 && this.edits.snapshots.size === files.length,
+    })
+  }
+
+  clearEdits() {
+    this.edits.files.clear()
+    this.edits.snapshots.clear()
+    this.postEdits()
   }
 
   /**
@@ -128,21 +151,18 @@ class ChatViewProvider {
   }
 
   /**
-   * Put every file back as it was before this turn. Later edits to the same
-   * file overwrite earlier snapshots in the map, so the value held is always
-   * the state from before the turn began.
+   * Put every outstanding file back. Snapshots are only ever written once per
+   * path, so the value held is the state from before the agent first touched
+   * it — not before its most recent edit.
    */
-  async undo(batchId) {
-    const entries = this.undoable.get(batchId)
-    if (!entries || !entries.length) return
-
+  async undo() {
     const root = this.root
-    if (!root) return
+    if (!root || !this.edits.snapshots.size) return
 
     let restored = 0
     let failed = 0
 
-    for (const { path: relative, before } of entries) {
+    for (const [relative, before] of this.edits.snapshots) {
       const target = vscode.Uri.joinPath(vscode.Uri.file(root), relative)
       try {
         if (before === null) await vscode.workspace.fs.delete(target, { useTrash: true })
@@ -153,14 +173,12 @@ class ChatViewProvider {
       }
     }
 
-    this.undoable.delete(batchId)
-    this.post({ type: 'undone', id: batchId })
-
     const summary =
       `Reverted ${restored} file${restored === 1 ? '' : 's'}` +
       (failed ? `, ${failed} could not be restored` : '')
     this.transcript.push({ type: 'notice', text: summary })
     this.post({ type: 'notice', text: summary })
+    this.clearEdits()
     this.save()
   }
 
@@ -249,6 +267,9 @@ class ChatViewProvider {
           approval: config().autoApprove,
         })
         this.refreshBudget()
+        // Snapshots live in the extension host, so outstanding edits survive a
+        // webview reload even though only the transcript is persisted.
+        this.postEdits()
       } else if (msg.type === 'approval') {
         // Write it back to settings rather than holding it in the webview, so
         // the choice survives a reload and stays visible in the Settings UI.
@@ -256,7 +277,10 @@ class ChatViewProvider {
           .getConfiguration('howardAgent')
           .update('autoApprove', msg.value, vscode.ConfigurationTarget.Global)
       } else if (msg.type === 'open') await this.openFile(msg.path, msg.line)
-      else if (msg.type === 'undo') await this.undo(msg.id)
+      else if (msg.type === 'undo') await this.undo()
+      // Keep just dismisses: the edits are already on disk. It also releases
+      // the snapshots, which is the point — they can be large.
+      else if (msg.type === 'keep') this.clearEdits()
       else if (msg.type === 'answer') this.answer(msg.id, msg.value)
       else if (msg.type === 'send') await this.send(msg.text)
       else if (msg.type === 'stop') {
@@ -393,12 +417,6 @@ class ChatViewProvider {
     this.controller = new AbortController()
     let started = false
 
-    // One undo batch per user turn, matching how people think about it: "put
-    // back what it just did".
-    const batchId = `batch-${Date.now()}`
-    const snapshots = new Map() // path -> before, first write wins
-    const touched = new Map() // path -> { added, removed, created }
-
     const ui = {
       onText: (chunk) => {
         if (!started) {
@@ -430,11 +448,13 @@ class ChatViewProvider {
         this.post({ type: 'toolEnd', id, status, stats })
       },
       onFileChange: (entry, stats) => {
-        // Keep the earliest snapshot: undo means "before this turn", not
-        // "before the last of several edits to the same file".
-        if (!snapshots.has(entry.path)) snapshots.set(entry.path, entry.before)
+        // First snapshot wins: undo means "before the agent touched this",
+        // not "before its most recent edit".
+        if (!this.edits.snapshots.has(entry.path)) {
+          this.edits.snapshots.set(entry.path, entry.before)
+        }
 
-        const running = touched.get(entry.path) || {
+        const running = this.edits.files.get(entry.path) || {
           added: 0,
           removed: 0,
           created: false,
@@ -445,7 +465,7 @@ class ChatViewProvider {
         running.created = running.created || !!(stats && stats.created)
         // Earliest edit wins — that is the line to land on when the file opens.
         if (!running.firstLine && stats && stats.firstLine) running.firstLine = stats.firstLine
-        touched.set(entry.path, running)
+        this.edits.files.set(entry.path, running)
       },
       onRetry: (attempt, max) =>
         this.post({ type: 'notice', text: `Upstream busy — retrying (${attempt}/${max})…` }),
@@ -482,28 +502,7 @@ class ChatViewProvider {
       this.controller = null
       this.flush()
 
-      if (touched.size) {
-        const files = [...touched].map(([path, s]) => ({ path, ...s }))
-        const totals = files.reduce(
-          (acc, f) => ({ added: acc.added + f.added, removed: acc.removed + f.removed }),
-          { added: 0, removed: 0 },
-        )
-        // Only offer Undo if we actually captured snapshots — a file too large
-        // to snapshot must not get a button that would silently do nothing.
-        const undoable = [...snapshots].map(([path, before]) => ({ path, before }))
-        if (undoable.length) this.undoable.set(batchId, undoable)
-
-        const change = {
-          type: 'changes',
-          id: batchId,
-          files,
-          ...totals,
-          canUndo: undoable.length === files.length,
-        }
-        this.transcript.push(change)
-        this.post(change)
-      }
-
+      this.postEdits()
       this.save()
       this.post({ type: 'busy', value: false })
       this.post({ type: 'assistantEnd' })
@@ -580,6 +579,7 @@ class ChatViewProvider {
 </head>
 <body>
   <div id="log"></div>
+  <div id="edits" hidden></div>
   <div id="composer">
     <textarea id="input" rows="2" placeholder="Ask about your code…"></textarea>
     <div id="bar">

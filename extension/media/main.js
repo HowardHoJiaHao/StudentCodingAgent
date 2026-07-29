@@ -11,13 +11,13 @@ const stopBtn = document.getElementById('stop')
 const usageEl = document.getElementById('usage')
 const approveEl = document.getElementById('approve')
 const budgetEl = document.getElementById('budget')
+const editsEl = document.getElementById('edits')
 
 let current = null // the assistant bubble currently streaming into
 let buffer = ''
 let repaintQueued = false
 let thinkingEl = null
 const toolRows = new Map()
-const changeBars = new Map()
 
 /**
  * A visible sign the turn is alive. Streaming text is its own feedback, so
@@ -336,61 +336,76 @@ function diffBadge(stats) {
 }
 
 /**
- * End-of-turn summary: every file touched, with a way back. Undo is offered
- * only when a snapshot exists for all of them, so the button never half-works.
+ * Outstanding edits, pinned above the composer rather than scrolling away in
+ * the log. The files are already written — Keep dismisses and releases the
+ * snapshots, Undo puts them back.
  */
-function changesBar(msg, done) {
-  const box = bubble('changes')
+function renderEdits(msg) {
+  editsEl.textContent = ''
+
+  if (!msg.files || !msg.files.length) {
+    editsEl.hidden = true
+    return
+  }
+  editsEl.hidden = false
 
   const head = document.createElement('div')
-  head.className = 'changes-head'
+  head.className = 'edits-head'
 
   const label = document.createElement('span')
-  label.className = 'changes-label'
+  label.className = 'edits-label'
   label.textContent = `${msg.files.length} file${msg.files.length === 1 ? '' : 's'} changed`
 
-  head.append(label, diffBadge({ added: msg.added, removed: msg.removed }))
-
   const spacer = document.createElement('span')
-  spacer.className = 'changes-spacer'
-  head.appendChild(spacer)
+  spacer.className = 'edits-spacer'
 
-  if (msg.canUndo && !done) {
+  head.append(label, diffBadge({ added: msg.added, removed: msg.removed }), spacer)
+
+  const keep = document.createElement('button')
+  keep.textContent = 'Keep'
+  keep.addEventListener('click', () => vscode.postMessage({ type: 'keep' }))
+  head.appendChild(keep)
+
+  if (msg.canUndo) {
     const undo = document.createElement('button')
-    undo.className = 'inline'
+    undo.className = 'secondary'
     undo.textContent = 'Undo'
     undo.addEventListener('click', () => {
       undo.disabled = true
+      keep.disabled = true
       undo.textContent = 'Undoing…'
-      vscode.postMessage({ type: 'undo', id: msg.id })
+      vscode.postMessage({ type: 'undo' })
     })
     head.appendChild(undo)
-  } else if (done) {
+  } else {
     const note = document.createElement('span')
-    note.className = 'changes-done'
-    note.textContent = 'reverted'
+    note.className = 'edits-note'
+    note.title = 'A file was too large to snapshot, so this batch cannot be reverted.'
+    note.textContent = "can't undo"
     head.appendChild(note)
   }
 
-  box.appendChild(head)
+  editsEl.appendChild(head)
+
+  const list = document.createElement('div')
+  list.className = 'edits-list'
 
   for (const file of msg.files) {
     const row = document.createElement('div')
-    row.className = 'changes-file'
+    row.className = 'edits-file'
 
     const verb = document.createElement('span')
-    verb.className = 'changes-verb'
+    verb.className = 'edits-verb'
     verb.textContent = file.created ? 'new' : 'edited'
 
     const name = fileLink(file.path, file.firstLine)
-    name.classList.add('changes-name')
+    name.classList.add('edits-name')
 
     row.append(verb, name, diffBadge(file))
-    box.appendChild(row)
+    list.appendChild(row)
   }
 
-  scroll(true)
-  return box
+  editsEl.appendChild(list)
 }
 
 /**
@@ -480,7 +495,6 @@ function setBudget(spend, max) {
 function restore(entries, tokens) {
   log.textContent = ''
   toolRows.clear()
-  changeBars.clear()
   thinkingEl = null
   current = null
 
@@ -497,10 +511,6 @@ function restore(entries, tokens) {
       // A question still unanswered when the window reloaded can't be revived —
       // its promise died with the old extension host — so show it as skipped.
       askBlock(entry, entry.answer == null ? '(unanswered)' : entry.answer)
-    } else if (entry.type === 'changes') {
-      // Snapshots live only in the extension host, so a reloaded window cannot
-      // honour Undo — show the summary without offering a button that would lie.
-      changeBars.set(entry.id, changesBar(entry, true))
     } else if (entry.type === 'error') {
       bubble('error').textContent = entry.text
     } else if (entry.type === 'notice') {
@@ -606,24 +616,9 @@ window.addEventListener('message', (event) => {
       current = null
       break
 
-    case 'changes':
-      changeBars.set(msg.id, changesBar(msg, false))
-      current = null
+    case 'edits':
+      renderEdits(msg)
       break
-
-    case 'undone': {
-      const bar = changeBars.get(msg.id)
-      if (bar) {
-        const button = bar.querySelector('button')
-        if (button) {
-          const note = document.createElement('span')
-          note.className = 'changes-done'
-          note.textContent = 'reverted'
-          button.replaceWith(note)
-        }
-      }
-      break
-    }
 
     case 'budget':
       setBudget(msg.spend, msg.max)
