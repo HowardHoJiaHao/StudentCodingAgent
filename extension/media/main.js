@@ -107,6 +107,76 @@ function setToolStatus(entry, status, stats) {
   entry.row.insertBefore(summary, entry.status)
 }
 
+/**
+ * A question from the model: the options it offered, plus a free-text box so
+ * the user is never boxed into a choice that doesn't fit.
+ * `answered` pre-fills a past question when replaying the transcript.
+ */
+function askBlock(msg, answered) {
+  const el = bubble('ask')
+
+  const q = document.createElement('div')
+  q.className = 'ask-q'
+  q.textContent = msg.question
+  el.appendChild(q)
+
+  const choices = document.createElement('div')
+  choices.className = 'ask-options'
+  el.appendChild(choices)
+
+  const finish = (value) => {
+    choices.textContent = ''
+    const chosen = document.createElement('div')
+    chosen.className = 'ask-answer'
+    chosen.textContent = `→ ${value}`
+    choices.appendChild(chosen)
+  }
+
+  if (answered != null) {
+    finish(answered)
+    return el
+  }
+
+  const pick = (value) => {
+    if (!value || !String(value).trim()) return
+    finish(value)
+    vscode.postMessage({ type: 'answer', id: msg.id, value: String(value).trim() })
+  }
+
+  for (const option of msg.options || []) {
+    const button = document.createElement('button')
+    button.className = 'ask-option'
+    button.textContent = option
+    button.addEventListener('click', () => pick(option))
+    choices.appendChild(button)
+  }
+
+  const other = document.createElement('div')
+  other.className = 'ask-other'
+
+  const field = document.createElement('input')
+  field.type = 'text'
+  field.placeholder = msg.options && msg.options.length ? 'Other — type your own…' : 'Your answer…'
+  field.addEventListener('keydown', (event) => {
+    if (event.key === 'Enter') {
+      event.preventDefault()
+      pick(field.value)
+    }
+  })
+
+  const submit = document.createElement('button')
+  submit.className = 'inline'
+  submit.textContent = 'Reply'
+  submit.addEventListener('click', () => pick(field.value))
+
+  other.append(field, submit)
+  choices.appendChild(other)
+
+  scroll(true)
+  field.focus()
+  return el
+}
+
 /** Budget spent against the cap, so a student sees the wall before they hit it. */
 function setBudget(spend, max) {
   if (max == null) {
@@ -135,6 +205,10 @@ function restore(entries, tokens) {
       const row = toolRow(entry)
       if (entry.status && entry.status !== 'running') setToolStatus(row, entry.status, entry.stats)
       else toolRows.set(entry.id, row)
+    } else if (entry.type === 'ask') {
+      // A question still unanswered when the window reloaded can't be revived —
+      // its promise died with the old extension host — so show it as skipped.
+      askBlock(entry, entry.answer == null ? '(unanswered)' : entry.answer)
     } else if (entry.type === 'error') {
       bubble('error').textContent = entry.text
     } else if (entry.type === 'status') {
@@ -221,6 +295,11 @@ window.addEventListener('message', (event) => {
       current = null
       break
     }
+
+    case 'ask':
+      askBlock(msg, null)
+      current = null
+      break
 
     case 'budget':
       setBudget(msg.spend, msg.max)

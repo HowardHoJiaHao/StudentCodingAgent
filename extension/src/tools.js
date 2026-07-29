@@ -248,6 +248,36 @@ const TOOLS = [
     },
   },
   {
+    name: 'ask_user',
+    // Asking changes nothing, so it never needs an approval prompt — the
+    // question itself is the prompt.
+    mutates: false,
+    description:
+      'Ask the user a question when you genuinely need their decision and cannot ' +
+      'reasonably pick yourself — an ambiguous requirement, or a choice only they ' +
+      'can make. Offer 2-4 short, concrete options. They can always write their own ' +
+      'answer instead, so do not add an "other" option yourself. Do not use this to ' +
+      'ask permission to edit files, or for anything you could settle by reading the ' +
+      'code.',
+    parameters: {
+      type: 'object',
+      properties: {
+        question: { type: 'string', description: 'One clear question' },
+        options: {
+          type: 'array',
+          items: { type: 'string' },
+          description: '2-4 short choices, a few words each',
+        },
+      },
+      required: ['question'],
+    },
+    async run({ question, options }, { ask }) {
+      if (!ask) return 'Error: this interface cannot ask questions. Decide yourself and say why.'
+      const answer = await ask(question, Array.isArray(options) ? options.slice(0, 4) : [])
+      return `The user answered: ${answer}`
+    },
+  },
+  {
     name: 'run_command',
     mutates: true,
     // Deliberately NOT sandboxed: cwd only sets where the command starts. It

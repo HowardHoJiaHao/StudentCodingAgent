@@ -33,6 +33,8 @@ Guidelines:
 - After a change that can be checked, run the tests or build.
 - Be concise. Show code, not prose about code.
 - If a command fails, read the error and fix the cause rather than retrying.
+- Make ordinary judgement calls yourself. Use ask_user only when the answer
+  genuinely changes what you build and you cannot settle it by reading the code.
 - Say when you're done, briefly.`
 
 // Rough proxy for tokens. Four characters per token is close enough for deciding
@@ -75,7 +77,7 @@ function compact(messages, ui) {
   return trimmed > 0
 }
 
-async function runTurn({ endpoint, apiKey, model, messages, root, signal, ui, approve }) {
+async function runTurn({ endpoint, apiKey, model, messages, root, signal, ui, approve, ask }) {
   for (let step = 0; step < MAX_STEPS; step++) {
     compact(messages, ui)
 
@@ -130,7 +132,7 @@ async function runTurn({ endpoint, apiKey, model, messages, root, signal, ui, ap
               // File tools return { text, stats } so the UI can show a +/- summary;
               // everything else returns a plain string. Only the text goes to the
               // model — stats are for the human.
-              const raw = await tool.run(args, { root })
+              const raw = await tool.run(args, { root, ask, signal })
               const isDetailed = raw && typeof raw === 'object'
               result = isDetailed ? raw.text : raw
               ui.onToolEnd(id, 'ok', result, isDetailed ? raw.stats : null)

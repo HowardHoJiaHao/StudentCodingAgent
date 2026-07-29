@@ -87,6 +87,41 @@ class ChatViewProvider {
     this.always = new Set()
     this.controller = null
     this.pending = '' // assistant text streaming into the current bubble
+    this.asks = new Map() // question id -> { resolve, reject }
+  }
+
+  /**
+   * Put a question to the user and wait for the answer.
+   *
+   * The tool call is suspended on this promise, so it must always settle:
+   * Stop rejects it, and a reload clears it via failAsks(). Leaving it pending
+   * would hang the turn with no way out.
+   */
+  ask(question, options) {
+    const id = `ask-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`
+    return new Promise((resolve, reject) => {
+      this.asks.set(id, { resolve, reject })
+      this.transcript.push({ type: 'ask', id, question, options, answer: null })
+      this.post({ type: 'ask', id, question, options })
+    })
+  }
+
+  answer(id, value) {
+    const entry = this.asks.get(id)
+    if (!entry) return
+    this.asks.delete(id)
+
+    const record = this.transcript.find((e) => e.type === 'ask' && e.id === id)
+    if (record) record.answer = value
+    this.save()
+
+    this.post({ type: 'answered', id, value })
+    entry.resolve(value)
+  }
+
+  failAsks(reason) {
+    for (const [, entry] of this.asks) entry.reject(new Error(reason))
+    this.asks.clear()
   }
 
   save() {
@@ -100,6 +135,7 @@ class ChatViewProvider {
   }
 
   reset() {
+    this.failAsks('Chat cleared.')
     this.messages = null
     this.transcript = []
     this.always.clear()
@@ -145,8 +181,12 @@ class ChatViewProvider {
         await vscode.workspace
           .getConfiguration('howardAgent')
           .update('autoApprove', msg.value, vscode.ConfigurationTarget.Global)
-      } else if (msg.type === 'send') await this.send(msg.text)
-      else if (msg.type === 'stop' && this.controller) this.controller.abort()
+      } else if (msg.type === 'answer') this.answer(msg.id, msg.value)
+      else if (msg.type === 'send') await this.send(msg.text)
+      else if (msg.type === 'stop') {
+        this.failAsks('Stopped.')
+        if (this.controller) this.controller.abort()
+      }
       else if (msg.type === 'signin') await vscode.commands.executeCommand('howardAgent.setKey')
     })
   }
@@ -318,6 +358,7 @@ class ChatViewProvider {
         signal: this.controller.signal,
         ui,
         approve: (tool, args) => this.approve(tool, args),
+        ask: (question, options) => this.ask(question, options),
       })
     } catch (err) {
       const text = err.name === 'AbortError' ? 'Stopped.' : err.message
