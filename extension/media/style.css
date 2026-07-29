@@ -128,6 +128,17 @@ textarea:focus {
   opacity: 0.6;
 }
 
+/* Approval mode. Deliberately in the composer rather than Settings — it is a
+   per-task decision, not something you configure once. */
+#approve {
+  font-size: 0.85em;
+  padding: 3px 4px;
+  border-radius: 3px;
+  color: var(--vscode-dropdown-foreground);
+  background: var(--vscode-dropdown-background);
+  border: 1px solid var(--vscode-dropdown-border, transparent);
+}
+
 button {
   padding: 4px 12px;
   cursor: pointer;

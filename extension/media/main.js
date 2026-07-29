@@ -9,6 +9,7 @@ const input = document.getElementById('input')
 const sendBtn = document.getElementById('send')
 const stopBtn = document.getElementById('stop')
 const usageEl = document.getElementById('usage')
+const approveEl = document.getElementById('approve')
 
 let current = null // the assistant bubble currently streaming into
 let buffer = ''
@@ -116,6 +117,10 @@ function send() {
 sendBtn.addEventListener('click', send)
 stopBtn.addEventListener('click', () => vscode.postMessage({ type: 'stop' }))
 
+approveEl.addEventListener('change', () =>
+  vscode.postMessage({ type: 'approval', value: approveEl.value }),
+)
+
 input.addEventListener('keydown', (event) => {
   // Enter sends, Shift+Enter makes a newline.
   if (event.key === 'Enter' && !event.shiftKey) {
@@ -171,6 +176,7 @@ window.addEventListener('message', (event) => {
 
     case 'restore':
       restore(msg.entries || [], msg.tokens)
+      if (msg.approval) approveEl.value = msg.approval
       break
 
     case 'error': {

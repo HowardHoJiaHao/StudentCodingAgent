@@ -111,16 +111,39 @@ class ChatViewProvider {
           type: 'restore',
           entries: this.transcript,
           tokens: this.tokens,
+          approval: config().autoApprove,
         })
+      } else if (msg.type === 'approval') {
+        // Write it back to settings rather than holding it in the webview, so
+        // the choice survives a reload and stays visible in the Settings UI.
+        await vscode.workspace
+          .getConfiguration('howardAgent')
+          .update('autoApprove', msg.value, vscode.ConfigurationTarget.Global)
       } else if (msg.type === 'send') await this.send(msg.text)
       else if (msg.type === 'stop' && this.controller) this.controller.abort()
       else if (msg.type === 'signin') await vscode.commands.executeCommand('howardAgent.setKey')
     })
   }
 
+  /**
+   * The Activity Bar icon is a shortcut to the editor tab, not a second place
+   * to chat. Rendering the conversation twice in one window is confusing, and
+   * a 300px-wide column is a poor fit for reading code, so the sidebar is a
+   * launcher and the tab is the real UI.
+   */
   resolveWebviewView(view) {
-    this.attach(view.webview)
-    view.onDidDispose(() => this.webviews.delete(view.webview))
+    view.webview.options = { enableScripts: true, localResourceRoots: [this.context.extensionUri] }
+    view.webview.html = this.launcherHtml(view.webview)
+    view.webview.onDidReceiveMessage((msg) => {
+      if (msg.type === 'open') this.openInEditor()
+    })
+
+    this.openInEditor()
+    // Fires when you click away to Explorer and back — reopen a tab the user
+    // has since closed, so the icon always does the same thing.
+    view.onDidChangeVisibility(() => {
+      if (view.visible) this.openInEditor()
+    })
   }
 
   /** Open the same chat as an editor tab, so it can sit beside your code. */
@@ -267,6 +290,45 @@ class ChatViewProvider {
     }
   }
 
+  /** Sidebar contents: a signpost to the tab, in case it gets closed. */
+  launcherHtml(webview) {
+    const nonce = this.nonce()
+    return `<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta http-equiv="Content-Security-Policy"
+      content="default-src 'none'; style-src ${webview.cspSource} 'unsafe-inline'; script-src 'nonce-${nonce}';">
+<title>Howard Agent</title>
+<style>
+  body { padding: 16px; font-family: var(--vscode-font-family); color: var(--vscode-foreground); }
+  p { opacity: 0.7; font-size: 0.9em; line-height: 1.5; }
+  button {
+    width: 100%; padding: 6px 12px; cursor: pointer; border: none; border-radius: 3px;
+    color: var(--vscode-button-foreground); background: var(--vscode-button-background);
+  }
+</style>
+</head>
+<body>
+  <p>Howard Agent opens as an editor tab so it can sit beside your code.</p>
+  <button id="open">Open Chat</button>
+  <script nonce="${nonce}">
+    const vscode = acquireVsCodeApi()
+    document.getElementById('open').addEventListener('click', () =>
+      vscode.postMessage({ type: 'open' }))
+  </script>
+</body>
+</html>`
+  }
+
+  nonce() {
+    return Array.from({ length: 32 }, () =>
+      'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.charAt(
+        Math.floor(Math.random() * 62),
+      ),
+    ).join('')
+  }
+
   html(webview) {
     const nonce = Array.from({ length: 32 }, () =>
       'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789'.charAt(
@@ -292,6 +354,11 @@ class ChatViewProvider {
   <div id="composer">
     <textarea id="input" rows="2" placeholder="Ask about your code…"></textarea>
     <div id="bar">
+      <select id="approve" title="When to skip the approval prompt">
+        <option value="never">Ask every time</option>
+        <option value="edits">Auto-approve edits</option>
+        <option value="always">Auto-approve all</option>
+      </select>
       <span id="usage"></span>
       <button id="stop" hidden>Stop</button>
       <button id="send">Send</button>
