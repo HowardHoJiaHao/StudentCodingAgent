@@ -291,7 +291,17 @@ class ChatViewProvider {
       return
     }
 
-    if (!this.messages) this.messages = [{ role: 'system', content: SYSTEM_PROMPT(root) }]
+    // Rebuild the system prompt every turn rather than trusting the stored copy.
+    // It ships with the extension and changes on upgrade, while this array is
+    // persisted per workspace — a saved conversation would otherwise pin an old
+    // build's instructions forever. The root can change between sessions too.
+    if (!this.messages) {
+      this.messages = [{ role: 'system', content: SYSTEM_PROMPT(root) }]
+    } else if (this.messages[0] && this.messages[0].role === 'system') {
+      this.messages[0].content = SYSTEM_PROMPT(root)
+    } else {
+      this.messages.unshift({ role: 'system', content: SYSTEM_PROMPT(root) })
+    }
 
     // Attached as a system message rather than folded into the user's text, so
     // the transcript shows what they typed and nothing else.
