@@ -60,7 +60,7 @@
       "properties": {
         "howardAgent.endpoint": {
           "type": "string",
-          "default": "https://api.yourdomain.com/v1",
+          "default": "https://codingagentversion2-production.up.railway.app/v1",
           "markdownDescription": "Your proxy endpoint. Must end in `/v1`."
         },
         "howardAgent.model": {

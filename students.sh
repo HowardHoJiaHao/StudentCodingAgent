@@ -53,7 +53,7 @@ fmt() { if have_jq; then jq "$@"; else cat; fi; }
 key_for_alias() {
   local alias=$1 token
   have_jq || die "jq is required for name lookups (apt install jq / winget install jqlang.jq)"
-  token=$(api GET "/key/list?return_full_object=true&size=500" \
+  token=$(api GET "/key/list?return_full_object=true&size=100" \
     | jq -r --arg a "$alias" '(.keys // .data // [])[] | select(.key_alias==$a) | .token' | head -1)
   [[ -n $token && $token != "null" ]] || die "no student called '$alias' (try: $0 list)"
   echo "$token"
@@ -198,7 +198,7 @@ EOF
     ;;
 
   list)
-    api GET "/key/list?return_full_object=true&size=500" | fmt -r '
+    api GET "/key/list?return_full_object=true&size=100" | fmt -r '
       (.keys // .data // [])
       | map(select(.key_alias != null and (.key_alias | startswith("_preflight_") | not)))
       | sort_by(.key_alias)
