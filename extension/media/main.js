@@ -14,7 +14,19 @@ const budgetEl = document.getElementById('budget')
 
 let current = null // the assistant bubble currently streaming into
 let buffer = ''
+let repaintQueued = false
 const toolRows = new Map()
+
+function scheduleRender() {
+  if (repaintQueued) return
+  repaintQueued = true
+  requestAnimationFrame(() => {
+    repaintQueued = false
+    if (!current) return
+    render(current, buffer)
+    scroll(false)
+  })
+}
 
 function atBottom() {
   return log.scrollHeight - log.scrollTop - log.clientHeight < 60
@@ -32,7 +44,130 @@ function bubble(kind) {
   return el
 }
 
-/** Minimal markdown: fenced code blocks, everything else plain text. */
+/**
+ * Inline spans: `code`, **bold**, *italic*. Built as DOM nodes rather than
+ * innerHTML, so a model that emits markup can't execute anything.
+ * Code is matched first — asterisks inside a code span stay literal.
+ */
+const INLINE = /(`[^`\n]+`)|(\*\*[^*\n]+\*\*)|(__[^_\n]+__)|(\*[^*\n]+\*)|(_[^_\n]+_)/g
+
+function inline(parent, text) {
+  let last = 0
+  let match
+  INLINE.lastIndex = 0
+
+  while ((match = INLINE.exec(text))) {
+    if (match.index > last) {
+      parent.appendChild(document.createTextNode(text.slice(last, match.index)))
+    }
+    const token = match[0]
+    if (token.startsWith('`')) {
+      const code = document.createElement('code')
+      code.className = 'inline-code'
+      code.textContent = token.slice(1, -1)
+      parent.appendChild(code)
+    } else if (token.startsWith('**') || token.startsWith('__')) {
+      const strong = document.createElement('strong')
+      strong.textContent = token.slice(2, -2)
+      parent.appendChild(strong)
+    } else {
+      const em = document.createElement('em')
+      em.textContent = token.slice(1, -1)
+      parent.appendChild(em)
+    }
+    last = match.index + token.length
+  }
+
+  if (last < text.length) parent.appendChild(document.createTextNode(text.slice(last)))
+}
+
+/** Block level: headings, lists, quotes, rules, paragraphs. */
+function blocks(parent, text) {
+  const lines = text.split('\n')
+  let i = 0
+
+  const flushList = (ordered, items) => {
+    const list = document.createElement(ordered ? 'ol' : 'ul')
+    for (const item of items) {
+      const li = document.createElement('li')
+      inline(li, item)
+      list.appendChild(li)
+    }
+    parent.appendChild(list)
+  }
+
+  while (i < lines.length) {
+    const line = lines[i]
+
+    if (!line.trim()) {
+      i++
+      continue
+    }
+
+    const heading = /^(#{1,4})\s+(.*)$/.exec(line)
+    if (heading) {
+      const h = document.createElement('h' + Math.min(heading[1].length + 2, 6))
+      inline(h, heading[2])
+      parent.appendChild(h)
+      i++
+      continue
+    }
+
+    if (/^(---+|\*\*\*+|___+)\s*$/.test(line)) {
+      parent.appendChild(document.createElement('hr'))
+      i++
+      continue
+    }
+
+    if (/^\s*>\s?/.test(line)) {
+      const quote = document.createElement('blockquote')
+      const buf = []
+      while (i < lines.length && /^\s*>\s?/.test(lines[i])) {
+        buf.push(lines[i].replace(/^\s*>\s?/, ''))
+        i++
+      }
+      inline(quote, buf.join('\n'))
+      parent.appendChild(quote)
+      continue
+    }
+
+    if (/^\s*[-*+]\s+/.test(line)) {
+      const items = []
+      while (i < lines.length && /^\s*[-*+]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*[-*+]\s+/, ''))
+        i++
+      }
+      flushList(false, items)
+      continue
+    }
+
+    if (/^\s*\d+[.)]\s+/.test(line)) {
+      const items = []
+      while (i < lines.length && /^\s*\d+[.)]\s+/.test(lines[i])) {
+        items.push(lines[i].replace(/^\s*\d+[.)]\s+/, ''))
+        i++
+      }
+      flushList(true, items)
+      continue
+    }
+
+    // Anything else is a paragraph, running until a blank line or a new block.
+    const buf = []
+    while (
+      i < lines.length &&
+      lines[i].trim() &&
+      !/^(#{1,4}\s|\s*[-*+]\s|\s*\d+[.)]\s|\s*>|---+$)/.test(lines[i])
+    ) {
+      buf.push(lines[i])
+      i++
+    }
+    const p = document.createElement('p')
+    inline(p, buf.join('\n'))
+    parent.appendChild(p)
+  }
+}
+
+/** Markdown: fenced code blocks split out, the rest parsed as blocks. */
 function render(el, text) {
   el.textContent = ''
   const parts = text.split(/```/)
@@ -59,10 +194,8 @@ function render(el, text) {
 
       wrap.append(pre, copy)
       el.appendChild(wrap)
-    } else if (part) {
-      const span = document.createElement('span')
-      span.textContent = part
-      el.appendChild(span)
+    } else if (part.trim()) {
+      blocks(el, part)
     }
   })
 }
@@ -266,11 +399,16 @@ window.addEventListener('message', (event) => {
         buffer = ''
       }
       buffer += msg.text
-      render(current, buffer)
-      scroll(false)
+      // Reparsing the whole message per token is wasteful now that it is real
+      // markdown; one repaint per frame keeps it smooth on long replies.
+      scheduleRender()
       break
 
     case 'assistantEnd':
+      if (current) {
+        render(current, buffer)
+        scroll(false)
+      }
       current = null
       break
 
