@@ -70,8 +70,9 @@ src/extension.js   VS Code wiring: webview, SecretStorage, modals
 media/             webview UI, themed with var(--vscode-*)
 ```
 
-`loop.js` and `tools.js` are the same design as the CLI in
-[`../howard-agent/`](../howard-agent/), so a fix in one ports directly.
+`loop.js` and `tools.js` are the same design as the `howard-agent/` CLI in the
+parent repository, so a fix in one ports directly. (Plain text, not a link — a
+relative path out of this directory breaks once the extension is packaged.)
 
 The loop, with the interface removed:
 
