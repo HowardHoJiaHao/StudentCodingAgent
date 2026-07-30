@@ -21,6 +21,10 @@ const STATE_MESSAGES = 'howardAgent.messages'
 const STATE_TRANSCRIPT = 'howardAgent.transcript'
 const STATE_TOKENS = 'howardAgent.tokens'
 
+// Marks the throwaway "what file is open" message so it can be replaced each
+// turn rather than piling up.
+const CONTEXT_PREFIX = '[editor context] '
+
 /**
  * autoApprove was a boolean before it became a three-way choice. A settings.json
  * written by the old build still holds true/false, so map those rather than
@@ -406,8 +410,15 @@ class ChatViewProvider {
 
     // Attached as a system message rather than folded into the user's text, so
     // the transcript shows what they typed and nothing else.
+    //
+    // Replaced, not appended: one per turn left a trail of stale "currently
+    // open" claims contradicting each other, and a stack of system messages
+    // dilutes the authority of the real prompt at index 0.
+    this.messages = this.messages.filter(
+      (m) => !(m.role === 'system' && String(m.content).startsWith(CONTEXT_PREFIX)),
+    )
     const context = activeFileContext(root)
-    if (context) this.messages.push({ role: 'system', content: context })
+    if (context) this.messages.push({ role: 'system', content: CONTEXT_PREFIX + context })
 
     this.messages.push({ role: 'user', content: text })
 
