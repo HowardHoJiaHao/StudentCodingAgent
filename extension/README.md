@@ -103,4 +103,6 @@ table derive from it.
   backoff, then the turn fails.
 - **Windows commands run through PowerShell**, so bash syntax from the model
   can fail. Tell students to mention their shell if it matters.
-- **Chat isn't persisted** across window reloads.
+- **Undo doesn't survive a window reload.** The chat is saved per folder and
+  comes back, but the original file copies behind **Undo**, and any **Always in
+  this chat** approvals, are kept in memory only.
