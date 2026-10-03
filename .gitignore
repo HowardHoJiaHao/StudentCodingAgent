@@ -1,8 +1,10 @@
-# Secrets — never commit these
-.env
-.env.*
+# Secrets — never commit these. The wildcards also catch copies and editor
+# backups, such as "admin - Copy.env" or admin.env.save.
+.env*
+*.env
+admin.env*
 !.env.example
-admin.env
+!admin.env.example
 *.key
 *.pem
 

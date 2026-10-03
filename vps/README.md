@@ -73,7 +73,7 @@ cd ..
 ./students.sh block ali        # stop them, keep the history
 ./students.sh unblock ali
 ./students.sh delete ali
-./students.sh spend            # 30-day report across everyone
+./students.sh spend            # spend per student, with totals
 ```
 
 `jq` is required for anything that looks a student up by name:

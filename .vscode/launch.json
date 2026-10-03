@@ -1,0 +1,27 @@
+{
+  // Two ways to try the extension, both from the Run and Debug panel:
+  //
+  //   Run Extension     — F5 from source, in a second window ("Extension
+  //                       Development Host"). For working on the code.
+  //   Test as student   — packages the .vsix you send to students and opens it in
+  //                       a separate, clean VS Code. For checking what they get.
+  //
+  // extension/.vscode/launch.json does the first when that folder is opened on
+  // its own.
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Extension",
+      "type": "extensionHost",
+      "request": "launch",
+      "args": ["--extensionDevelopmentPath=${workspaceFolder}/extension"]
+    },
+    {
+      "name": "Test as student",
+      "type": "node",
+      "request": "launch",
+      "program": "${workspaceFolder}/test-as-student.mjs",
+      "console": "integratedTerminal"
+    }
+  ]
+}

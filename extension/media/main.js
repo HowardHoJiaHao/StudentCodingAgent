@@ -574,6 +574,9 @@ function restore(entries, tokens) {
 }
 
 function send() {
+  // Enter reaches here too, so honour the disabled button. Returning before the
+  // input is cleared keeps the text, ready to send once the turn finishes.
+  if (sendBtn.disabled) return
   const text = input.value.trim()
   if (!text) return
   input.value = ''

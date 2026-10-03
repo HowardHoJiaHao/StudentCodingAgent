@@ -8,9 +8,13 @@ You need **VS Code**. Nothing else — no Node, no npm, no terminal.
 
 ## 1. Install the extension
 
+The `.vsix` file is an add-on for VS Code, like an extension for your web
+browser. It isn't a separate program: once installed, it lives inside VS Code.
+
 Save `howard-agent-0.1.0.vsix` somewhere you can find it, then in VS Code:
 
-`Ctrl+Shift+P` → type **Install from VSIX** → Enter → pick the file.
+`Ctrl+Shift+P` → choose **Extensions: Install from VSIX...** (typing
+`Install from VSIX` finds it) → Enter → pick the file.
 
 <sub>Mac: `Cmd+Shift+P`. Or: Extensions sidebar → `...` menu at the top → *Install from VSIX…*</sub>
 
@@ -26,6 +30,9 @@ operating system's keychain, not in a file.
 ## 3. Open a project folder
 
 **File → Open Folder** and pick the folder you want to work in.
+
+If VS Code asks whether you trust the authors of the files, choose **Yes, I
+trust the authors**. The agent is switched off in Restricted Mode.
 
 The agent can only read and edit files **inside the folder you open**, so open
 the project you're working on — not your whole drive.
@@ -47,6 +54,26 @@ as a tab. Ask it something:
 - **It asks before changing anything.** Read the prompt before clicking Allow
 - The bar above the message box shows every file it changed, with **Undo**
 - The bottom right shows how much budget you have left
+
+## Commands
+
+`Ctrl+Shift+P` → type **Howard** to see them all:
+
+| Command | What it does |
+|---|---|
+| **Howard Agent: Sign In (Set Key)** | Paste your key. VS Code remembers it. |
+| **Howard Agent: Sign Out** | Removes your saved key and clears the chat |
+| **Howard Agent: New Chat** | Starts a fresh conversation, which is cheaper |
+| **Howard Agent: Open Chat in Editor** | Opens the chat as a tab instead of in the sidebar |
+
+New Chat and Open Chat in Editor are also buttons at the top of the chat panel.
+
+## Updating or removing it
+
+- **New version:** when you get a new `.vsix` file, install it the same way as
+  in step 1. It replaces the old one, and you stay signed in.
+- **Uninstall:** open the Extensions panel (`Ctrl+Shift+X`), find **Howard
+  Agent**, click the gear, then **Uninstall**.
 
 ## Your budget
 
@@ -71,6 +98,8 @@ If it leaks, ask for a new one — it can be revoked on its own.
 | "Budget used up" | Ask for a top-up |
 | "Open a folder first" | Step 3 — the agent needs a folder |
 | No `< • >` icon | Reload VS Code (`Ctrl+Shift+P` → *Reload Window*) |
+| "Restricted Mode" at the bottom left, agent does nothing | Click **Restricted Mode** → **Trust** |
+| First reply takes a long time | The server was asleep and is waking up. Wait — the next replies are faster |
 | Nothing happens | Check your internet, then reload the window |
 
 ## One thing to know

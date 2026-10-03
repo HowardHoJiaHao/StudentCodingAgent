@@ -67,13 +67,25 @@ service names if yours differ.
 existing keys undecryptable.** Set it once, save a copy somewhere safe.
 
 **5. Generate a domain** — Settings → Networking → Generate Domain. You'll get
-something like `litellm-production.up.railway.app`.
+something like `litellm-production.up.railway.app`. If it asks for a port, use
+the one in the deploy log line `Uvicorn running on http://0.0.0.0:<port>`. If
+the two don't match, every request gets `Application failed to respond` (502).
 
-**6. Check it's alive**
+**6. On the free plan, turn on Serverless** — Settings → **Serverless** → on, then
+click **Deploy** to apply the change. Railway refuses free-plan deployments
+without it. The service then sleeps after ~10 minutes with no traffic and wakes
+on the next request (see [Cost](#cost)).
+
+**7. Check it's alive**
 
 ```bash
-curl https://litellm-production.up.railway.app/health/liveliness
+curl https://litellm-production.up.railway.app/health/liveliness   # "I'm alive!"
+curl https://litellm-production.up.railway.app/health/readiness    # {"status":"healthy","db":"connected"}
 ```
+
+If the domain answers `Application not found` (404), no service is running
+behind it. That usually means the plan or credits ran out, or Serverless is off
+on the free plan. Fix that, then **Deployments → ⋮ → Redeploy**.
 
 ## Managing students
 
@@ -133,9 +145,14 @@ box gets you IP allowlisting back.
 
 Railway bills usage across three services; Postgres and Redis run continuously,
 so expect meaningfully more than a $5/mo VPS. For a handful of students the
-convenience is usually worth it — check Railway's current pricing and confirm
-your services won't sleep, since a cold start mid-request looks like a hang to a
-student.
+convenience is usually worth it — check Railway's current pricing.
+
+**The free plan works, with two catches.** Serverless is mandatory, so the
+service sleeps when idle and the first request after a quiet period is slow —
+to a student that looks like a hang. And the free allowance is small: when it
+runs out, Railway stops the services and the domain answers
+`Application not found`. For a class that depends on it, use a paid plan with
+Serverless off.
 
 ## Verify before shipping the extension
 

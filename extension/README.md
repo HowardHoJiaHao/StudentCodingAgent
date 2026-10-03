@@ -47,7 +47,7 @@ The key is stored in VS Code's SecretStorage, which is the OS keychain — not
 
 | Tool | Asks first |
 |---|---|
-| `read_file` `list_dir` `glob_files` `grep` | no |
+| `read_file` `list_dir` `glob_files` `grep` `ask_user` | no |
 | `write_file` `edit_file` `run_command` | yes |
 
 Read-only tools run silently. Anything that changes a file or runs a command
@@ -58,13 +58,15 @@ Settings under `howardAgent.*`:
 
 - `endpoint` — proxy URL, must end in `/v1`
 - `model` — `deepseek-chat` (use this) or `deepseek-reasoner`
-- `autoApprove` — skip all prompts. Only in a repo you can `git checkout`.
+- `autoApprove` — `never` (ask every time), `edits` (auto-approve file edits,
+  which can't leave the open folder; still ask for commands), or `always`
+  (skip all prompts — only in a repo you can `git checkout`)
 
 ## How it's put together
 
 ```
-src/llm.js         streaming client — SSE parsing, tool-call reassembly
-src/tools.js       the seven tools; `mutates: true` triggers the prompt
+src/llm.js         streaming client — SSE parsing, tool-call reassembly, retries
+src/tools.js       the eight tools; `mutates: true` triggers the prompt
 src/loop.js        the agent loop, UI behind callbacks
 src/extension.js   VS Code wiring: webview, SecretStorage, modals
 media/             webview UI, themed with var(--vscode-*)
@@ -94,8 +96,11 @@ table derive from it.
 ## Known limits
 
 - **`run_command` isn't sandboxed.** It runs with the student's privileges.
-- **No context compaction** — long chats eventually error. Use **New Chat**.
-- **No retry** on upstream 429/5xx; the turn fails.
+- **Compaction is coarse** — long chats keep working by trimming old tool
+  output, so the model forgets file contents it read early on. Use **New Chat**
+  when switching tasks.
+- **Retries are bounded** — upstream 429/5xx is retried up to 3 times with
+  backoff, then the turn fails.
 - **Windows commands run through PowerShell**, so bash syntax from the model
   can fail. Tell students to mention their shell if it matters.
 - **Chat isn't persisted** across window reloads.

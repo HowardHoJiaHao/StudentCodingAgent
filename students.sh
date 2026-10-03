@@ -10,7 +10,7 @@
 #   ./students.sh block ali          stop them without deleting history
 #   ./students.sh unblock ali
 #   ./students.sh delete ali         gone for good
-#   ./students.sh spend              30-day report across everyone
+#   ./students.sh spend              spend per student, with totals
 #
 # Config comes from admin.env in this directory — see admin.env.example.
 
@@ -244,7 +244,38 @@ EOF
     ;;
 
   spend)
-    api GET "/global/spend/report?start_date=$(date -u -d '30 days ago' +%Y-%m-%d 2>/dev/null || date -u -v-30d +%Y-%m-%d)&end_date=$(date -u +%Y-%m-%d)" | fmt .
+    # /global/spend/report is LiteLLM Enterprise-only, so build the report from
+    # the key list, which every edition serves. A key's spend covers its current
+    # budget period and resets along with the budget.
+    have_jq || die "jq is required for 'spend' (apt install jq)"
+    api GET "/key/list?return_full_object=true&size=100" | jq -r '
+      def usd: "$" + ((. // 0) * 10000 | round / 10000 | tostring);
+      def left: [.max_budget - (.spend // 0), 0] | max;
+      (.keys // .data // [])
+      | map(select(.key_alias != null and (.key_alias | startswith("_preflight_") | not)))
+      | sort_by(-(.spend // 0))
+      | (["STUDENT", "SPENT", "BUDGET", "LEFT", "RESETS"] | @tsv),
+        (.[] | [
+          .key_alias,
+          (.spend | usd),
+          (if .max_budget == null then "none" else (.max_budget | usd) end),
+          (if .max_budget == null then "-" else (left | usd) end),
+          ((.budget_reset_at // "-") | .[0:10])
+        ] | @tsv),
+        (["TOTAL",
+          (map(.spend // 0) | add | usd),
+          (map(.max_budget // 0) | add | usd),
+          (map(select(.max_budget != null) | left) | add | usd),
+          ""] | @tsv)' | column -t -s $'\t'
+
+    # The proxy-wide figure also counts preflight and deleted keys, measured
+    # against the max_budget kill switch in config.yaml.
+    api GET /global/spend | jq -r '
+      select(.spend != null)
+      | "\nWhole server this period: $" + (.spend * 10000 | round / 10000 | tostring)
+        + " of the $" + (.max_budget * 10000 | round / 10000 | tostring)
+        + " cap (includes test and deleted keys)"
+    ' 2>/dev/null || true
     ;;
 
   *)

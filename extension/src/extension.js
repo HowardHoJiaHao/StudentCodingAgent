@@ -90,6 +90,7 @@ class ChatViewProvider {
 
     this.always = new Set()
     this.controller = null
+    this.busy = false // a turn is running; send() refuses to start another
     this.pending = '' // assistant text streaming into the current bubble
     this.asks = new Map() // question id -> { resolve, reject }
     // Edits accumulate across turns until the user keeps or reverts them, so
@@ -390,8 +391,18 @@ class ChatViewProvider {
       return
     }
 
+    // One turn at a time. A second loop on the same array can slip a user
+    // message between a tool call and its result, which the API rejects. Set
+    // before the first await, so two sends arriving together can't both pass.
+    if (this.busy) {
+      this.post({ type: 'notice', text: 'Still working — wait for this reply or click Stop.' })
+      return
+    }
+    this.busy = true
+
     const apiKey = await this.context.secrets.get(KEY_SECRET)
     if (!apiKey) {
+      this.busy = false
       this.post({ type: 'needkey' })
       return
     }
@@ -519,6 +530,7 @@ class ChatViewProvider {
       }
     } finally {
       this.controller = null
+      this.busy = false
       this.flush()
 
       // Order matters: assistantEnd closes the streaming bubble, then the done
